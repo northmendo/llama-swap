@@ -24,6 +24,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/discovery"
 	"github.com/mostlygeek/llama-swap/internal/docagent"
+	"github.com/mostlygeek/llama-swap/internal/draftassistant"
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/hw"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
@@ -123,12 +124,20 @@ func runValidate(configPath, configDir string, out io.Writer) int {
 // passes config validation. It reads only: the config file is never written
 // and nothing is started. Exit code 0 when the scan ran; 1 on config
 // errors or when no folders are configured.
+//
+// With --refine, each draft is additionally refined by the configured
+// draft_assistant LLM (llama-swap discover --refine -config X). The
+// refinement is a hard-gated draft: the LLM's answer must parse as YAML,
+// match the model-stanza schema and pass the same config validation, or
+// the rule-based draft is printed with the reason instead. --refine
+// without an enabled draft_assistant section is an error (exit 1).
 func runDiscover(args []string, out io.Writer) int {
 	fs := flag.NewFlagSet("discover", flag.ContinueOnError)
 	fs.SetOutput(out)
 	configPath := fs.String("config", "", "path to config file")
 	configDir := fs.String("config-dir", "", "directory of *.yml/*.yaml config files (additive to -config)")
 	jsonOut := fs.Bool("json", false, "print the scan report as JSON")
+	refine := fs.Bool("refine", false, "refine each draft with the configured draft_assistant LLM; falls back to the rule-based draft when the refinement fails")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -150,8 +159,24 @@ func runDiscover(args []string, out io.Writer) int {
 		return 1
 	}
 
+	var refinements []refineNote
+	if *refine {
+		if cfg.DraftAssistant == nil || !cfg.DraftAssistant.Enabled {
+			fmt.Fprintln(out, "discover: --refine requires an enabled draft_assistant section (see docs/kb/guides/configuration/draft-assistant.md)")
+			return 1
+		}
+		refinements = refineScanDrafts(context.Background(), cfg, &result, out)
+	}
+
 	if *jsonOut {
-		encoded, err := json.MarshalIndent(result, "", "  ")
+		var payload any = result
+		if *refine {
+			payload = struct {
+				discovery.ScanResult
+				Refinements []refineNote `json:"refinements"`
+			}{result, refinements}
+		}
+		encoded, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
 			fmt.Fprintf(out, "discover: encoding report: %v\n", err)
 			return 1
@@ -160,13 +185,60 @@ func runDiscover(args []string, out io.Writer) int {
 		return 0
 	}
 
-	printDiscoverReport(result, out)
+	printDiscoverReport(result, refinements, out)
 	return 0
 }
 
+// refineNote records the refinement outcome for one drafted file, in the
+// human report and the --json output.
+type refineNote struct {
+	Path    string `json:"path"`
+	ModelID string `json:"modelId"`
+	Refined bool   `json:"refined"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// refineScanDrafts runs the draft assistant over every drafted file of a
+// scan, in place. A refined draft replaces the rule draft; a fallback
+// keeps it. Config-class errors (key env var not set) are printed and
+// also recorded as the note's reason — the scan itself still succeeds,
+// because refinement is an enhancement, never a requirement.
+func refineScanDrafts(ctx context.Context, cfg config.Config, result *discovery.ScanResult, out io.Writer) []refineNote {
+	notes := make([]refineNote, 0, len(result.Results))
+	for i := range result.Results {
+		fr := &result.Results[i]
+		if fr.Draft == nil || fr.Metadata == nil {
+			continue
+		}
+		note := refineNote{Path: fr.Path, ModelID: fr.Draft.ModelID}
+		outcome, err := draftassistant.Refine(ctx, cfg, *fr.Metadata, *fr.Draft)
+		switch {
+		case err != nil:
+			fmt.Fprintf(out, "discover: refine %s: %v\n", fr.Path, err)
+			note.Reason = err.Error()
+		case outcome.Refined:
+			*fr.Draft = outcome.Draft
+			// The file-level engine source explains the engine the
+			// refined draft actually references.
+			fr.EngineSource = outcome.Draft.EngineSource
+			note.Refined = true
+		default:
+			note.Reason = outcome.Reason
+		}
+		notes = append(notes, note)
+	}
+	return notes
+}
+
 // printDiscoverReport renders the human-readable per-file report: metadata,
-// engine choice, draft stanza, skip reasons, and the summary line.
-func printDiscoverReport(result discovery.ScanResult, out io.Writer) {
+// engine choice, draft stanza, skip reasons, refinement outcome, and the
+// summary line.
+func printDiscoverReport(result discovery.ScanResult, refinements []refineNote, out io.Writer) {
+	refineByPath := make(map[string]refineNote, len(refinements))
+	for _, note := range refinements {
+		refineByPath[note.Path] = note
+	}
+
 	for _, fr := range result.Results {
 		fmt.Fprintf(out, "== %s\n", fr.Path)
 
@@ -200,6 +272,13 @@ func printDiscoverReport(result discovery.ScanResult, out io.Writer) {
 				fmt.Fprintf(out, "   ctx-size: %s%s\n", intOrUnknown(fr.Draft.CtxSize), capped)
 			}
 			fmt.Fprintf(out, "   draft (paste under models:):\n%s\n", fr.Draft.YAML)
+			if note, ok := refineByPath[fr.Path]; ok {
+				if note.Refined {
+					fmt.Fprintf(out, "   refined: yes (draft_assistant)\n")
+				} else {
+					fmt.Fprintf(out, "   refined: no (fallback to rule-based draft: %s)\n", note.Reason)
+				}
+			}
 		} else {
 			fmt.Fprintf(out, "   skipped: %s\n", fr.SkipReason)
 		}
