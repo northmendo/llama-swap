@@ -158,6 +158,14 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		return Config{}, err
 	}
 
+	// Validate a present, enabled draft_assistant section so a
+	// misconfigured one fails at startup rather than at first
+	// refinement. The environment variable named by key_env is checked
+	// at call time, not here.
+	if err := validateDraftAssistant(config.DraftAssistant); err != nil {
+		return Config{}, err
+	}
+
 	// Sort model IDs for deterministic validation and normalization.
 	modelIds := make([]string, 0, len(config.Models))
 	for modelId := range config.Models {

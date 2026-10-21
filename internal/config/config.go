@@ -222,6 +222,16 @@ type Config struct {
 	// routes are mounted. See internal/config/agentapi.go.
 	AgentAPI *AgentAPIConfig `yaml:"agent_api"`
 
+	// DraftAssistant configures the optional LLM-assisted refinement of
+	// discovery drafts (`llama-swap discover --refine` and POST
+	// /agent/v1/refine). Nil when the config has no `draft_assistant:`
+	// section; the section defaults to disabled, in which case no
+	// refinement ever runs. Tooling-only: the running server's proxy and
+	// swap behavior never reads it, and the provider API key is never
+	// stored here — key_env names the environment variable that holds
+	// it. See internal/config/draftassistant.go.
+	DraftAssistant *DraftAssistantConfig `yaml:"draft_assistant"`
+
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.
 	GlobalConcurrencyLimit int `yaml:"globalConcurrencyLimit"`
