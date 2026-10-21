@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -11,11 +12,30 @@ const (
 	SelectorStrategyWarm      = "warm"
 	SelectorStrategyPin       = "pin"
 	SelectorStrategySpillover = "spillover"
+	SelectorStrategyFailover  = "failover"
 )
+
+// DefaultSelectorFailoverCooldown is how long a failover target that failed
+// is skipped before it is tried again, when settings.cooldown is not set.
+const DefaultSelectorFailoverCooldown = 60 * time.Second
 
 // SelectorSettings contains strategy-specific selector settings.
 type SelectorSettings struct {
-	Spillover int `yaml:"spillover" json:"spillover"`
+	Spillover int    `yaml:"spillover" json:"spillover"`
+	// Cooldown is how long a failed failover target is skipped, as a
+	// duration string (e.g. "90s", "1m30s"). Empty means
+	// DefaultSelectorFailoverCooldown.
+	Cooldown string `yaml:"cooldown" json:"cooldown"`
+
+	// cooldown is Cooldown parsed during validation, defaulting to
+	// DefaultSelectorFailoverCooldown for failover selectors.
+	cooldown time.Duration `yaml:"-" json:"-"`
+}
+
+// CooldownDuration returns the parsed failover cooldown, or 0 when the
+// selector is not a failover selector (or the config was never validated).
+func (s SelectorSettings) CooldownDuration() time.Duration {
+	return s.cooldown
 }
 
 // SelectorConfig describes a virtual model ID that resolves to a concrete
@@ -59,14 +79,29 @@ func validateSelectors(config Config) error {
 		}
 
 		switch selector.Strategy {
-		case SelectorStrategyPin, SelectorStrategyWarm, SelectorStrategySpillover:
+		case SelectorStrategyPin, SelectorStrategyWarm, SelectorStrategySpillover, SelectorStrategyFailover:
 		case "":
 			return fmt.Errorf("selectors.%s.strategy is required", selectorID)
 		default:
-			return fmt.Errorf("selectors.%s.strategy: unknown strategy %q (valid: warm, pin, spillover)", selectorID, selector.Strategy)
+			return fmt.Errorf("selectors.%s.strategy: unknown strategy %q (valid: warm, pin, spillover, failover)", selectorID, selector.Strategy)
 		}
 		if len(selector.Targets) == 0 {
 			return fmt.Errorf("selectors.%s.targets must contain at least one entry", selectorID)
+		}
+
+		if selector.Strategy == SelectorStrategyFailover {
+			cooldown := DefaultSelectorFailoverCooldown
+			if raw := strings.TrimSpace(selector.Settings.Cooldown); raw != "" {
+				parsed, err := time.ParseDuration(raw)
+				if err != nil || parsed <= 0 {
+					return fmt.Errorf("selectors.%s.settings.cooldown: invalid duration %q (e.g. \"90s\", \"1m30s\")", selectorID, selector.Settings.Cooldown)
+				}
+				cooldown = parsed
+			}
+			selector.Settings.cooldown = cooldown
+			// Write the parsed duration back through the shared map so
+			// the runtime reads the validated value.
+			config.Selectors[selectorID] = selector
 		}
 
 		resolvedTargets := make([]string, 0, len(selector.Targets))

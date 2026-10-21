@@ -272,6 +272,14 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if selector.Strategy == config.SelectorStrategySpillover {
 			internalMetadata["spillover"] = selector.Settings.Spillover
 		}
+		if selector.Strategy == config.SelectorStrategyFailover {
+			cooldown := selector.Settings.CooldownDuration()
+			if cooldown <= 0 {
+				cooldown = config.DefaultSelectorFailoverCooldown
+			}
+			internalMetadata["cooldownSeconds"] = int(cooldown.Seconds())
+			internalMetadata["failover"] = s.failovers.health(selectorID, time.Now())
+		}
 		data = append(data, newRecord(
 			selectorID,
 			selector.Name,

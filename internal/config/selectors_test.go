@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -402,4 +403,148 @@ selectors:
 	_, err := LoadConfigSources("", dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `duplicate selectors "public"`)
+}
+
+func TestConfig_Selectors_Failover(t *testing.T) {
+	cfg, err := LoadConfigFromReader(strings.NewReader(`
+models:
+  local:
+    cmd: echo ${PORT}
+peers:
+  lunaroute:
+    proxy: https://lunaroute.example.com
+    models: [glm-5.3-background]
+  deepseek:
+    proxy: https://api.deepseek.example.com
+    models: [deepseek-v4-flash]
+selectors:
+  explicit:
+    strategy: failover
+    targets: [lunaroute/glm-5.3-background, deepseek/deepseek-v4-flash, local]
+    settings:
+      cooldown: 90s
+    name: Lila brain cascade
+    description: Lunaroute first, DeepSeek second, local last
+  defaulted:
+    strategy: failover
+    targets: [local]
+`))
+	require.NoError(t, err)
+
+	explicit := cfg.Selectors["explicit"]
+	assert.Equal(t, SelectorStrategyFailover, explicit.Strategy)
+	assert.Equal(t, []string{"lunaroute/glm-5.3-background", "deepseek/deepseek-v4-flash", "local"}, explicit.Targets)
+	assert.Equal(t, "90s", explicit.Settings.Cooldown)
+	assert.Equal(t, 90*time.Second, explicit.Settings.CooldownDuration())
+	assert.Equal(t, "Lila brain cascade", explicit.Name)
+
+	defaulted := cfg.Selectors["defaulted"]
+	assert.Equal(t, DefaultSelectorFailoverCooldown, defaulted.Settings.CooldownDuration())
+}
+
+func TestConfig_Selectors_Failover_Validation(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "bad duration unit",
+			config: `
+selectors:
+  cascade:
+    strategy: failover
+    targets: [a]
+    settings:
+      cooldown: 90x
+`,
+			wantErr: `settings.cooldown: invalid duration "90x"`,
+		},
+		{
+			name: "zero duration",
+			config: `
+selectors:
+  cascade:
+    strategy: failover
+    targets: [a]
+    settings:
+      cooldown: 0s
+`,
+			wantErr: `settings.cooldown: invalid duration "0s"`,
+		},
+		{
+			name: "negative duration",
+			config: `
+selectors:
+  cascade:
+    strategy: failover
+    targets: [a]
+    settings:
+      cooldown: -5s
+`,
+			wantErr: `settings.cooldown: invalid duration "-5s"`,
+		},
+		{
+			name: "unknown target",
+			config: `
+selectors:
+  cascade:
+    strategy: failover
+    targets: [a, missing-model]
+`,
+			wantErr: `references unknown model "missing-model"`,
+		},
+		{
+			name: "selector chaining",
+			config: `
+selectors:
+  inner:
+    strategy: pin
+    targets: [a]
+  cascade:
+    strategy: failover
+    targets: [inner]
+`,
+			wantErr: "selector chaining is not supported",
+		},
+		{
+			name: "model id collision",
+			config: `
+selectors:
+  a:
+    strategy: failover
+    targets: [b]
+`,
+			wantErr: "name conflicts with model ID",
+		},
+	}
+
+	base := `
+models:
+  a:
+    cmd: echo ${PORT}
+  b:
+    cmd: echo ${PORT}
+`
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := LoadConfigFromReader(strings.NewReader(base + tc.config))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestConfig_Selectors_UnknownStrategyListsFailover(t *testing.T) {
+	_, err := LoadConfigFromReader(strings.NewReader(`
+models:
+  a:
+    cmd: echo ${PORT}
+selectors:
+  public:
+    strategy: random
+    targets: [a]
+`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "(valid: warm, pin, spillover, failover)")
 }

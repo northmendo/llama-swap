@@ -70,6 +70,12 @@ type Server struct {
 	profileMu     sync.RWMutex
 	activeProfile string
 
+	// failovers tracks per-target health for failover selectors. It is
+	// created when routes() builds the selector middleware (before the
+	// server accepts requests) and read by the model listing; nil-safe
+	// accessors cover Servers that never built the middleware.
+	failovers *selectorFailoverTracker
+
 	// configPath is the -config file the agent API's apply endpoint
 	// merges into; watchConfig records --watch-config, which reloads the
 	// file automatically after an apply. Set by main after New; empty

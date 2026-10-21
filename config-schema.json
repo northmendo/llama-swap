@@ -561,9 +561,10 @@
                         "enum": [
                             "warm",
                             "pin",
-                            "spillover"
+                            "spillover",
+                            "failover"
                         ],
-                        "description": "How a target is selected for each request."
+                        "description": "How a target is selected for each request. failover tries targets strictly in order, retrying the next target when one fails before the first response byte."
                     },
                     "targets": {
                         "type": "array",
@@ -582,6 +583,11 @@
                                 "minimum": 1,
                                 "default": 1,
                                 "description": "Requests reserved per active target before spilling over to the next target."
+                            },
+                            "cooldown": {
+                                "type": "string",
+                                "default": "60s",
+                                "description": "failover only: how long a failed target is skipped before it is tried again, as a duration string (e.g. \"90s\", \"1m30s\")."
                             }
                         },
                         "additionalProperties": false,

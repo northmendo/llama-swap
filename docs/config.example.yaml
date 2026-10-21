@@ -329,6 +329,32 @@ selectors:
       # - optional, default: 1
       spillover: 4
 
+  # failover tries targets strictly in the listed order and retries the next
+  # target when one fails before the first response byte is forwarded
+  # - failures: local load failures and health-check timeouts, peer
+  #   connection errors and timeouts, any HTTP >= 400 from a peer (401
+  #   auth/billing, 429 quota, 5xx transient)
+  # - NOT failures: a 2xx answer that errors mid-response (bytes already
+  #   went to the client), or the client disconnecting
+  # - when every target fails, the client sees the LAST target's real error
+  # - a failed target is skipped for a cooldown (default 60s) so a dead
+  #   primary adds no latency to later requests; the cooldown can be
+  #   overridden per selector with settings.cooldown
+  # - targets may mix hosted peers and local models; one stable model ID
+  #   (here "lila-brain") then routes through the whole cascade
+  "lila-brain":
+    strategy: failover
+    targets:
+      - "lunaroute/glm-5.3-background"
+      - "deepseek/deepseek-v4-flash"
+      - "ling-3.0-tiny"
+    settings:
+      # how long a failed target is skipped before it is tried again
+      # - optional, default: "60s"; a duration string like "90s" or "1m30s"
+      cooldown: 90s
+    name: "Lila brain cascade"
+    description: "Lunaroute first, DeepSeek second, local ling last"
+
 # engines: a dictionary of inference engine builds that models reference by name
 # - optional, default: not defined
 # - each key is an engine name, referenced by a model's `engine` setting

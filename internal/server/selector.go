@@ -91,6 +91,10 @@ func (t *selectorSpilloverTracker) release(selectorID, target string) {
 // and before the normal request context, filters, routing, and metrics pipeline.
 func CreateSelectorMiddleware(s *Server) chain.Middleware {
 	spillovers := newSelectorSpilloverTracker(s.cfg)
+	if s.failovers == nil {
+		s.failovers = newSelectorFailoverTracker(s.cfg)
+	}
+	failovers := s.failovers
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if len(s.cfg.Selectors) == 0 {
@@ -106,6 +110,13 @@ func CreateSelectorMiddleware(s *Server) chain.Middleware {
 			selector, found := s.cfg.Selectors[model]
 			if !found {
 				next.ServeHTTP(w, r)
+				return
+			}
+
+			// The failover strategy runs the whole downstream chain per
+			// target, so it handles rewriting itself.
+			if selector.Strategy == config.SelectorStrategyFailover {
+				serveFailoverSelector(s, next, w, r, model, failovers)
 				return
 			}
 

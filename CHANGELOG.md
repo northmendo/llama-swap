@@ -2,6 +2,35 @@
 
 ## Unreleased (fork)
 
+- Failover selectors: a new `strategy: failover` turns a selector into a
+  cascading model chain — targets are tried strictly in the listed
+  order and the same request is retried against the next target when
+  one fails, so one stable model ID (e.g. `lila-brain`) can walk
+  hosted peers and local models like `lunaroute/glm-5.3-background →
+  deepseek/deepseek-v4-flash → ling-3.0-tiny` with no client-side
+  change. Failures are precise: local load failures and health-check
+  timeouts, peer connection errors and timeouts, and any HTTP >= 400
+  from a peer (401/403 auth or billing, 429 quota, 5xx transient).
+  Non-failures are equally precise: a 2xx that errors mid-response
+  does NOT fail over once the first response byte has been forwarded
+  (a local model with `sendLoadingState` therefore commits the
+  response early via its loading SSE), a client disconnect stops the
+  walk, and websocket upgrades go to the first eligible target without
+  failover since an upgraded connection cannot be replayed. When every
+  target fails the client receives the LAST target's real error
+  response, not a generic one. A circuit breaker skips a failed target
+  for a cooldown (default 60s, per-selector override
+  `settings.cooldown: 90s`, any Go duration string, strictly
+  validated at load and `-validate`) so a dead primary adds no
+  latency to later requests; expiry or a success re-arms it, and when
+  every target is inside its cooldown the chain falls back to trying
+  in order rather than going dark. Every failover logs a one-line
+  event (failing target, reason, next target), and the live per-target
+  health (`failover: [{target, healthy, retryAt, lastError}]`) is
+  exposed in the selector's `/v1/models` metadata for the web UI. A
+  dedicated Failover UI panel is a possible follow-up; the existing UI
+  renders the new metadata unchanged. See
+  docs/kb/guides/routing/profiles-and-selectors.md.
 - Engine updater: each `engines:` entry gains an optional `update:`
   block declaring where new builds of its binary come from — a GitHub
   releases source (`source: github`, `repo`, required `asset_regex`,
