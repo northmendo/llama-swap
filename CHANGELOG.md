@@ -2,6 +2,31 @@
 
 ## Unreleased (fork)
 
+- Agent REST API: a new top-level `agent_api:` section (`enabled`,
+  `key`) mounts a disabled-by-default, bearer-authenticated JSON API at
+  `/agent/v1/` on the running server for automation that needs to drive
+  model onboarding without hand-editing YAML. Every route requires
+  `Authorization: Bearer <key>` (constant-time comparison; the key is
+  never rendered into responses, logs or redacted config output, and
+  `${env.VAR}` macros work for it). Routes: `POST /agent/v1/scan`
+  (discovery over the configured folders), `GET /agent/v1/engines`
+  (defined engines, env names only, never values), `POST
+  /agent/v1/draft` (rule-based draft for one model file, with an
+  internal seam for future draft refinement), `POST /agent/v1/validate`
+  (validate a model stanza or full config, no side effects) and `POST
+  /agent/v1/apply` (merge one approved model stanza into the config
+  file). Apply validates first (422 and no write when invalid, 200
+  "pending" and no write when `approved` is not exactly true), then
+  merges — never overwriting the rest of the file — takes a timestamped
+  backup, writes atomically (temp file + rename) and re-validates the
+  merged document through the full config pipeline before anything
+  touches disk, so a failure at any point leaves the original intact.
+  Existing model IDs are never overwritten (409). Because llama-swap
+  hot-reloads only on SIGHUP or --watch-config, apply reports
+  `reload_required` (false when --watch-config will reload automatically)
+  and apply requires running with a single `-config` file (409
+  otherwise). When the section is absent or disabled, no `/agent/v1`
+  routes are mounted and they all return 404.
 - Named engines: a new top-level `engines:` section defines each
   llama.cpp-family build once — binary (`cmd`), human `label` and an
   optional engine-level `env`. Models reference an engine with `engine:` and
