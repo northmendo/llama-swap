@@ -276,3 +276,123 @@ func TestAgentAPI_EngineRunningAndStop(t *testing.T) {
 	status, _ = env.do(t, http.MethodPost, "/agent/v1/engines/nosuch/update", map[string]any{"approved": true})
 	assert.Equal(t, http.StatusNotFound, status)
 }
+
+func TestAgentAPI_EngineCheck(t *testing.T) {
+	env := newEngineUpdateEnv(t, "new build")
+
+	// Check-all (no engines named): every engine with a source is
+	// queried and lands in the state file the updates view reads.
+	status, body := env.do(t, http.MethodPost, "/agent/v1/engines/check", map[string]any{})
+	require.Equal(t, http.StatusOK, status)
+	results, ok := body["results"].([]any)
+	require.True(t, ok, "results key: %v", body)
+	require.Len(t, results, 1)
+	row := results[0].(map[string]any)
+	assert.Equal(t, "testbuild", row["engine"])
+	assert.Equal(t, "v2.0.0", row["tag"])
+	assert.Equal(t, true, row["updateAvailable"])
+
+	status, body = env.do(t, http.MethodGet, "/agent/v1/engines/updates", nil)
+	require.Equal(t, http.StatusOK, status)
+	entry := body["engines"].([]any)[0].(map[string]any)
+	require.NotNil(t, entry["updateAvailable"], "check result visible: %v", entry)
+
+	// A named subset is the same report for those engines only.
+	status, body = env.do(t, http.MethodPost, "/agent/v1/engines/check",
+		map[string]any{"engines": []string{"testbuild"}})
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, body["results"], 1)
+
+	// Unknown engine names 404; nothing was checked.
+	status, body = env.do(t, http.MethodPost, "/agent/v1/engines/check",
+		map[string]any{"engines": []string{"nosuch"}})
+	require.Equal(t, http.StatusNotFound, status)
+
+	// Check never swaps: the binary and the rollback slot are
+	// untouched.
+	got, err := os.ReadFile(env.bin)
+	require.NoError(t, err)
+	assert.Equal(t, "#!/bin/sh\necho old\n", string(got))
+	_, err = os.Stat(env.bin + ".prev")
+	assert.True(t, os.IsNotExist(err))
+
+	// Locked like the rest of the API.
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/agent/v1/engines/check", strings.NewReader("{}"))
+	require.NoError(t, err)
+	resp, err := env.server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestAgentAPI_EngineRollback(t *testing.T) {
+	env := newEngineUpdateEnv(t, "new build")
+
+	// Unapproved is refused outright: no swap, no gate side effects.
+	status, body := env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/rollback", map[string]any{})
+	require.Equal(t, http.StatusBadRequest, status)
+	assert.Contains(t, body["error"].(map[string]any)["message"].(string), "approved")
+
+	// Without a previous update there is no rollback slot; the
+	// error says so and nothing changes.
+	status, body = env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/rollback", map[string]any{"approved": true})
+	require.Equal(t, http.StatusInternalServerError, status)
+	assert.Contains(t, body["error"].(map[string]any)["message"].(string), "no rollback slot")
+
+	// Unknown engine 404.
+	status, _ = env.do(t, http.MethodPost, "/agent/v1/engines/nosuch/rollback", map[string]any{"approved": true})
+	assert.Equal(t, http.StatusNotFound, status)
+
+	// After an update, rollback restores the old binary and is
+	// itself reversible: the newer build becomes the new slot.
+	status, body = env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/update", map[string]any{"approved": true})
+	require.Equal(t, http.StatusOK, status)
+
+	status, body = env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/rollback", map[string]any{"approved": true})
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, "testbuild", body["engine"])
+	assert.Equal(t, true, body["approved"])
+	assert.Contains(t, body["restoredFrom"], ".prev")
+
+	got, err := os.ReadFile(env.bin)
+	require.NoError(t, err)
+	assert.Equal(t, "#!/bin/sh\necho old\n", string(got))
+
+	status, body = env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/rollback", map[string]any{"approved": true})
+	require.Equal(t, http.StatusOK, status)
+	got, err = os.ReadFile(env.bin)
+	require.NoError(t, err)
+	assert.Equal(t, "new build", string(got), "rollback is reversible")
+}
+
+func TestAgentAPI_EngineRollbackRefusesRunningModelThenForceStops(t *testing.T) {
+	env := newEngineUpdateEnv(t, "new build")
+
+	status, _ := env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/update", map[string]any{"approved": true})
+	require.Equal(t, http.StatusOK, status)
+
+	env.rt.running = []string{"saluki"}
+	status, body := env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/rollback", map[string]any{"approved": true})
+	require.Equal(t, http.StatusConflict, status)
+	assert.Contains(t, body["error"].(map[string]any)["message"].(string), "saluki")
+
+	// Refused: binary unchanged, model still running.
+	got, err := os.ReadFile(env.bin)
+	require.NoError(t, err)
+	assert.Equal(t, "new build", string(got))
+	assert.Equal(t, []string{"saluki"}, env.rt.running)
+
+	// Approved + force: model stopped through the runtime, then the
+	// swap happens and the stopped model is reported.
+	status, body = env.do(t, http.MethodPost, "/agent/v1/engines/testbuild/rollback",
+		map[string]any{"approved": true, "force": true})
+	require.Equal(t, http.StatusOK, status)
+	stopped, _ := body["stoppedModels"].([]any)
+	require.Len(t, stopped, 1)
+	assert.Equal(t, "saluki", stopped[0])
+	assert.Empty(t, env.rt.running, "stopped models stay stopped")
+
+	got, err = os.ReadFile(env.bin)
+	require.NoError(t, err)
+	assert.Equal(t, "#!/bin/sh\necho old\n", string(got))
+}

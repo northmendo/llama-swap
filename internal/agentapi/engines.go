@@ -219,6 +219,140 @@ func (a *api) handleEngineUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, dto)
 }
 
+// engineCheckRequest is the body of POST /agent/v1/engines/check.
+type engineCheckRequest struct {
+	// Engines names the engines whose sources to query. Empty (or
+	// absent) means every engine that declares an update source.
+	Engines []string `json:"engines"`
+}
+
+// checkResultDTO is one row of the check endpoint's response, the same
+// shape the per-engine update route reports for its check-only call.
+type checkResultDTO struct {
+	Engine    string `json:"engine"`
+	Tag       string `json:"tag,omitempty"`
+	Available bool   `json:"updateAvailable"`
+	UpToDate  bool   `json:"upToDate"`
+	Note      string `json:"note,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// handleEngineCheck is POST /agent/v1/engines/check: query the update
+// sources of the named engines (all engines with a source when none are
+// named) and refresh the state file with what was found. Like the
+// check-only update call it never downloads anything — an actual swap
+// still goes through the approved update route.
+func (a *api) handleEngineCheck(w http.ResponseWriter, r *http.Request) {
+	var req engineCheckRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	for _, name := range req.Engines {
+		engine, ok := a.cfg.Engines[name]
+		if !ok {
+			writeError(w, r, http.StatusNotFound, "unknown engine "+name)
+			return
+		}
+		if engine.Update == nil {
+			writeError(w, r, http.StatusBadRequest, "engine "+name+" has no update source; add an update: block to its engines entry")
+			return
+		}
+	}
+	if a.engineStatePath() == "" {
+		writeError(w, r, http.StatusServiceUnavailable, "engine update state path is not configured on this server")
+		return
+	}
+
+	results, err := a.engineManager().Check(r.Context(), req.Engines)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "updating engine update state: "+err.Error())
+		return
+	}
+
+	dtos := make([]checkResultDTO, 0, len(results))
+	for _, res := range results {
+		dto := checkResultDTO{
+			Engine:    res.Engine,
+			Tag:       res.Tag,
+			Available: res.Available,
+			UpToDate:  res.UpToDate,
+			Note:      res.Note,
+		}
+		if res.Err != nil {
+			dto.Error = res.Err.Error()
+		}
+		dtos = append(dtos, dto)
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"results": dtos})
+}
+
+// engineRollbackRequest is the body of POST /agent/v1/engines/{name}/rollback.
+type engineRollbackRequest struct {
+	// Approved must be true for anything to happen, exactly like the
+	// update route: a rollback swaps the engine binary, so it is never
+	// implicit.
+	Approved bool `json:"approved"`
+
+	// Force stops models using the engine that are currently running
+	// instead of refusing the swap. Stopped models stay stopped.
+	Force bool `json:"force"`
+}
+
+// engineRollbackResultDTO is the response of the rollback route.
+type engineRollbackResultDTO struct {
+	Engine       string   `json:"engine"`
+	Approved     bool     `json:"approved"`
+	RestoredFrom string   `json:"restoredFrom,omitempty"`
+	Stopped      []string `json:"stoppedModels,omitempty"`
+}
+
+// handleEngineRollback is POST /agent/v1/engines/{name}/rollback:
+// restore the binary the updater kept at <target>.prev, applying the
+// same running-models gate and approved-gate as the update route. The
+// rollback is itself reversible: the swapped-out build becomes the new
+// .prev slot.
+func (a *api) handleEngineRollback(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if _, ok := a.cfg.Engines[name]; !ok {
+		writeError(w, r, http.StatusNotFound, "unknown engine "+name)
+		return
+	}
+
+	var req engineRollbackRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if !req.Approved {
+		writeError(w, r, http.StatusBadRequest, "rollback swaps the engine binary; send {\"approved\": true} to confirm")
+		return
+	}
+	if a.engineStatePath() == "" {
+		writeError(w, r, http.StatusServiceUnavailable, "engine update state path is not configured on this server")
+		return
+	}
+
+	res, err := a.engineManager().Rollback(name, req.Force)
+	if err != nil {
+		if engineupdate.IsRefusal(err) {
+			writeError(w, r, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, r, http.StatusInternalServerError, "rolling back engine "+name+": "+err.Error())
+		return
+	}
+
+	dto := engineRollbackResultDTO{
+		Engine:       name,
+		Approved:     true,
+		RestoredFrom: res.RestoredFrom,
+		Stopped:      res.StoppedModels,
+	}
+	if len(dto.Stopped) > 0 {
+		sort.Strings(dto.Stopped)
+	}
+	writeJSON(w, r, http.StatusOK, dto)
+}
+
 // engineManager builds the updater over this API's config and the
 // engine state path main wired in.
 func (a *api) engineManager() *engineupdate.Manager {

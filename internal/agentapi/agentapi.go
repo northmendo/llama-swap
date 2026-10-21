@@ -15,9 +15,12 @@
 //	POST /agent/v1/scan      run discovery over the configured folders
 //	GET  /agent/v1/engines   list defined engines (env keys only, never values)
 //	GET  /agent/v1/engines/updates     engine update state (check results)
+//	POST /agent/v1/engines/check       refresh sources (all, or the named subset)
 //	GET  /agent/v1/engines/{name}/running   models up on one engine
 //	POST /agent/v1/engines/{name}/stop      stop those models
 //	POST /agent/v1/engines/{name}/update    check; swap only when approved
+//	POST /agent/v1/engines/{name}/rollback restore the previous binary,
+//	                                          only when approved
 //	POST /agent/v1/draft      draft a model stanza for one model file
 //	POST /agent/v1/refine     draft + refine a stanza (LLM-assisted when
 //	                          the draft_assistant section is enabled)
@@ -105,9 +108,11 @@ func Register(mux *http.ServeMux, opts Options) {
 	inner.HandleFunc("POST /agent/v1/scan", a.handleScan)
 	inner.HandleFunc("GET /agent/v1/engines", a.handleEngines)
 	inner.HandleFunc("GET /agent/v1/engines/updates", a.handleEngineUpdates)
+	inner.HandleFunc("POST /agent/v1/engines/check", a.handleEngineCheck)
 	inner.HandleFunc("GET /agent/v1/engines/{name}/running", a.handleEngineRunning)
 	inner.HandleFunc("POST /agent/v1/engines/{name}/stop", a.handleEngineStop)
 	inner.HandleFunc("POST /agent/v1/engines/{name}/update", a.handleEngineUpdate)
+	inner.HandleFunc("POST /agent/v1/engines/{name}/rollback", a.handleEngineRollback)
 	inner.HandleFunc("POST /agent/v1/draft", a.handleDraft)
 	inner.HandleFunc("POST /agent/v1/refine", a.handleRefine)
 	inner.HandleFunc("POST /agent/v1/validate", a.handleValidate)

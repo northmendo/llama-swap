@@ -162,6 +162,47 @@ curl -s -H "$AUTH" $BASE/engines/updates
 Lists the running models that launch with the named engine. Used by
 `llama-swap engines update` to verify a swap is safe.
 
+### POST /agent/v1/engines/check
+
+Refreshes the update state from the sources: queries every engine that
+declares an `update:` block (or just the `engines` named in the body)
+and records what was found. Nothing is downloaded — an actual swap still
+goes through the approved update route.
+
+```bash
+curl -s -H "$AUTH" -d '{}' $BASE/engines/check
+curl -s -H "$AUTH" -d '{"engines": ["beellama"]}' $BASE/engines/check
+```
+
+```json
+{
+  "results": [
+    { "engine": "beellama", "tag": "b13", "updateAvailable": true }
+  ]
+}
+```
+
+A failing source is one row with `error` set, not a failed request.
+
+### POST /agent/v1/engines/{name}/rollback
+
+Restores the binary the updater kept at `<binary>.prev`, under the same
+gates as the update route: the body must carry `{"approved": true}`, and
+the rollback is refused with **409** while models using the engine are
+running unless `"force": true` stops them first. The swapped-out build
+becomes the new `.prev`, so a rollback is itself reversible.
+
+```bash
+curl -s -H "$AUTH" -d '{"approved": true}' $BASE/engines/beellama/rollback
+```
+
+```json
+{ "engine": "beellama", "approved": true, "restoredFrom": "/opt/llama-server.prev" }
+```
+
+With no `.prev` slot (nothing was ever updated) the request fails with
+the reason in the error envelope.
+
 ### POST /agent/v1/engines/{name}/stop
 
 Stops those models through the normal unload machinery. They stay
