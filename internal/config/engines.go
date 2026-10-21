@@ -28,6 +28,12 @@ type EngineConfig struct {
 	// Env is applied to every model that references the engine. A
 	// model-level env entry with the same name wins.
 	Env []string `yaml:"env"`
+
+	// Update optionally declares where new builds of this engine come
+	// from (GitHub releases or a direct URL) so `llama-swap engines`
+	// and the agent API can check for, download and swap the binary.
+	// Nil when the engine is updated by hand.
+	Update *EngineUpdateConfig `yaml:"update"`
 }
 
 func (e *EngineConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
@@ -72,6 +78,10 @@ func validateEngines(engines map[string]EngineConfig) error {
 		}
 
 		if err := checkEngineBinary(name, args[0]); err != nil {
+			return err
+		}
+
+		if err := validateEngineUpdate(name, engine.Update); err != nil {
 			return err
 		}
 	}
