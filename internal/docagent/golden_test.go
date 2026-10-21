@@ -170,8 +170,8 @@ func TestDocs_RealConfigExample_SectionKeys(t *testing.T) {
 		"metricsMaxInMemory", "captureBuffer", "ui", "performance", "startPort",
 		"sendLoadingState", "includeAliasesInList", "globalTTL", "unloadTimeout",
 		"globalConcurrencyLimit", "macros", "apiKeys", "security", "tailcat",
-		"upstream", "profiles", "selectors", "models", "hooks", "routing",
-		"peers",
+		"upstream", "profiles", "selectors", "engines", "models", "hooks",
+		"routing", "peers",
 	}
 
 	for _, key := range want {
@@ -215,9 +215,12 @@ func TestDocs_RealSchema_KnownPaths(t *testing.T) {
 	for _, path := range []string{
 		"", "models", "models.*", "models.*.cmd", "models.*.filters",
 		"models.*.capabilities", "models.*.capabilities.tools",
+		"models.*.engine", "models.*.args",
 		"routing", "routing.router.use", "peers", "peers.*.apiKey",
 		"tailcat", "tailcat.models", "peers.*.tailcatKey",
 		"profiles", "selectors", "macros", "apiKeys", "globalTTL",
+		"engines", "engines.*", "engines.*.cmd", "engines.*.label",
+		"engines.*.env",
 	} {
 		if _, ok := docs.SchemaFragment(path); !ok {
 			t.Errorf("SchemaFragment(%q) ok = false, want true", path)

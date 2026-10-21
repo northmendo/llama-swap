@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (fork)
+
+- Named engines: a new top-level `engines:` section defines each
+  llama.cpp-family build once — binary (`cmd`), human `label` and an
+  optional engine-level `env`. Models reference an engine with `engine:` and
+  append model-specific flags with `args:`; the effective launch command is
+  composed at config load, engine env merges with model env (model entries
+  win), and `llama-swap -validate` rejects unknown engine references,
+  missing binaries and non-executable binaries before anything starts.
+  Models with a plain `cmd:` are unchanged.
+
 ## v264 (Oct 12, 2026)
 
 This release includes a new `auto:orphans` set for swap matrix rules. This new set automatically includes all models that were not explictly added to a set.  It is defined as `(orphan1 | orphan2 | orphan3 | ...)`. The orphans set is handy for definitions like: `+always & +auto:orphans`, where `+always` is a set of models that are always loaded and should never be swapped out.

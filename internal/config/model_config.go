@@ -142,6 +142,16 @@ type ModelConfig struct {
 	Unlisted      bool     `yaml:"unlisted"`
 	UseModelName  string   `yaml:"useModelName"`
 
+	// Engine names an entry in the top-level engines section. When set, the
+	// model's effective launch command is composed at config load from the
+	// engine's cmd followed by Args, and the engine's env is merged into Env
+	// (model entries win). Mutually exclusive with cmd.
+	Engine string `yaml:"engine"`
+
+	// Args is the model-specific part of an engine-based launch command,
+	// appended to the engine's cmd. Only valid together with Engine.
+	Args string `yaml:"args"`
+
 	// #179 for /v1/models
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
@@ -197,6 +207,8 @@ func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		ConcurrencyLimit: 0,
 		Name:             "",
 		Description:      "",
+		Engine:           "",
+		Args:             "",
 
 		// matches http.DefaultTransport
 		Timeouts: TimeoutsConfig{

@@ -197,6 +197,12 @@ type Config struct {
 	Profiles  map[string]ProfileConfig  `yaml:"profiles"`
 	Selectors map[string]SelectorConfig `yaml:"selectors"`
 
+	// Engines defines reusable inference engine builds (binary, label and
+	// optional env) that models reference by name with the engine field.
+	// The engine's cmd plus the model's args become the model's Cmd at
+	// config load. See internal/config/engines.go.
+	Engines map[string]EngineConfig `yaml:"engines"`
+
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.
 	GlobalConcurrencyLimit int `yaml:"globalConcurrencyLimit"`

@@ -78,6 +78,7 @@ something to read top to bottom.
 ## Related
 
 - `guides/model-runtime/writing-cmd` — the full `cmd` and `proxy` picture
+- `guides/configuration/engines` — sharing one llama.cpp build across models
 - `guides/model-runtime/capabilities-and-model-listings` — what `capabilities` does and doesn't do
 - `guides/model-runtime/troubleshooting-model-wont-load` — when a model won't start
 - `reference/config/*` — every setting in `config.example.yaml`, searchable by section

@@ -124,6 +124,12 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		}
 	}
 
+	// Validate declared engines before resolving model references, so a
+	// broken engine definition is reported even when no model uses it yet.
+	if err := validateEngines(config.Engines); err != nil {
+		return Config{}, err
+	}
+
 	// Sort model IDs for deterministic validation and normalization.
 	modelIds := make([]string, 0, len(config.Models))
 	for modelId := range config.Models {
@@ -160,6 +166,13 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 
 		if err := modelConfig.Capabilities.Validate(); err != nil {
 			return Config{}, fmt.Errorf("model %s: %w", modelId, err)
+		}
+
+		// Resolve the model's engine reference, if any, into the concrete
+		// launch command and environment. Models without an engine are
+		// untouched.
+		if err := applyModelEngine(config.Engines, modelId, &modelConfig); err != nil {
+			return Config{}, err
 		}
 
 		// Auto-register setParamsByID keys as aliases (skip the model's own ID)

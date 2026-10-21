@@ -139,6 +139,13 @@ func resolveConfigMacros(yamlStr string) (map[string]any, configMacroConfig, err
 		raw[key] = substituteMacroList(value, declarations.Macros)
 	}
 
+	// Engines are shared between models, so the model-scoped ${PORT} and
+	// ${MODEL_ID} macros can never resolve there. Reject them with a targeted
+	// message instead of the generic unknown-macro error.
+	if err := validateEngineMacroUses(raw); err != nil {
+		return nil, configMacroConfig{}, err
+	}
+
 	// startPort may itself contain a global macro, so read it only after the
 	// global pass. Sorting models preserves the existing deterministic port
 	// allocation contract.
@@ -173,7 +180,14 @@ func resolveConfigMacros(yamlStr string) (map[string]any, configMacroConfig, err
 
 		cmd, _ := model["cmd"].(string)
 		proxy, _ := model["proxy"].(string)
+		engine, _ := model["engine"].(string)
+		args, _ := model["args"].(string)
 		cmdHasPort := strings.Contains(cmd, "${PORT}")
+		// An engine model's command lives in args; ${PORT} there allocates
+		// the port exactly like ${PORT} in a plain cmd does.
+		if engine != "" && strings.Contains(args, "${PORT}") {
+			cmdHasPort = true
+		}
 		proxyHasPort := strings.Contains(proxy, "${PORT}")
 		if cmdHasPort || proxyHasPort {
 			// PORT is available only to models whose command requests an
@@ -209,7 +223,7 @@ func resolveConfigMacros(yamlStr string) (map[string]any, configMacroConfig, err
 }
 
 func stripRawCommandComments(model map[string]any) {
-	for _, field := range []string{"cmd", "cmdStop"} {
+	for _, field := range []string{"cmd", "cmdStop", "args"} {
 		if value, ok := model[field].(string); ok {
 			model[field] = StripComments(value)
 		}

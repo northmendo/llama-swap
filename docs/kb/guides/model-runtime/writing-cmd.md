@@ -157,4 +157,5 @@ If the upstream expects a different model name than your llama-swap ID, use
 
 - `reference/config/models` — every model setting, annotated
 - `guides/configuration/macros` — cutting repetition out of long commands
+- `guides/configuration/engines` — sharing one build across models with `engines`
 - `guides/model-runtime/troubleshooting-model-wont-load` — when it doesn't start

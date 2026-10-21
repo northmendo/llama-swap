@@ -158,6 +158,38 @@
         }
     },
     "properties": {
+        "engines": {
+            "type": "object",
+            "description": "A dictionary of inference engine builds. Each key is an engine name that models reference with the engine field. An engine defines its binary once so models share it without repeating the command.",
+            "additionalProperties": {
+                "type": "object",
+                "required": [
+                    "cmd",
+                    "label"
+                ],
+                "properties": {
+                    "cmd": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Base command for the engine: the binary path plus any arguments shared by every model using this engine. Global macros can be used; the model-scoped ${PORT} and ${MODEL_ID} belong in the referencing model's args. The binary must exist and be executable; this is checked when the config is loaded."
+                    },
+                    "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Human-readable label for the build, e.g. \"beellama b12\"."
+                    },
+                    "env": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "pattern": "^[A-Z_][A-Z0-9_]*=.*$"
+                        },
+                        "default": [],
+                        "description": "Environment variables applied to every model using this engine, in ENV_NAME=value format. Model-level env entries with the same name win."
+                    }
+                }
+            }
+        },
         "healthCheckTimeout": {
             "type": "integer",
             "minimum": 15,
@@ -425,8 +457,17 @@
             "description": "A dictionary of model configurations. Each key is a model's ID. Model settings have defaults if not defined. The model's ID is available as ${MODEL_ID}.",
             "additionalProperties": {
                 "type": "object",
-                "required": [
-                    "cmd"
+                "anyOf": [
+                    {
+                        "required": [
+                            "cmd"
+                        ]
+                    },
+                    {
+                        "required": [
+                            "engine"
+                        ]
+                    }
                 ],
                 "properties": {
                     "macros": {
@@ -436,6 +477,16 @@
                         "type": "string",
                         "minLength": 1,
                         "description": "Command to run to start the inference server. Macros can be used. Comments allowed with |."
+                    },
+                    "engine": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Name of the engine this model launches, from the top-level engines section. The effective command is the engine's cmd followed by this model's args. Mutually exclusive with cmd."
+                    },
+                    "args": {
+                        "type": "string",
+                        "default": "",
+                        "description": "Model-specific arguments appended to the engine's cmd. ${PORT}, ${MODEL_ID} and macros can be used. Only valid together with engine."
                     },
                     "cmdStop": {
                         "type": "string",

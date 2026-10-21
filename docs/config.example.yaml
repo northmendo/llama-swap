@@ -329,6 +329,40 @@ selectors:
       # - optional, default: 1
       spillover: 4
 
+# engines: a dictionary of inference engine builds that models reference by name
+# - optional, default: not defined
+# - each key is an engine name, referenced by a model's `engine` setting
+# - define each llama.cpp-family build once here instead of repeating its
+#   binary and shared flags in every model's cmd
+# - the binary must exist and be executable; this is checked when the
+#   config is loaded and by `llama-swap -validate`
+# - a model's effective command is the engine's cmd followed by the model's
+#   own `args`, so engine flags come first and can be overridden per model
+# - global macros can be used in engine cmd; the per-model ${PORT} and
+#   ${MODEL_ID} macros belong in the model's args, not in the engine
+engines:
+
+  # each key is an engine name, and each engine needs a cmd and a label
+  "beellama":
+    # label: a human-readable description of this build
+    # - required
+    label: "beellama b12"
+
+    # cmd: the binary and the arguments shared by every model using this engine
+    # - required
+    # - it is just a string like a model's cmd, comments allowed with |
+    cmd: |
+      /opt/llama-builds/beellama/b12/llama-server
+      --flash-attn
+      --no-webui
+
+    # env: environment variables applied to every model using this engine
+    # - optional, default: []
+    # - each value is a single string in ENV_NAME=value format
+    # - a model-level env entry with the same name wins
+    env:
+      - "GGML_CUDA_ENABLE_UNIFIED_MEMORY=1"
+
 # models: a dictionary of model configurations
 # - required
 # - each key is the model's ID, used in API requests
@@ -592,6 +626,26 @@ models:
       # - a field set to its zero value (false, 0, []) cannot be told apart
       #   from an unset one, so use this to suppress a wrong discovered value
       disableAuto: false
+
+  # Engine model example:
+  # instead of writing its own cmd, this model launches the "beellama"
+  # engine defined in the engines section above and appends its own args
+  "saluki-27b":
+    # engine: name of the engine this model launches
+    # - the effective command is the engine's cmd followed by this model's
+    #   args, and the engine's env is merged into this model's env
+    # - cannot be combined with cmd on the same model
+    engine: "beellama"
+
+    # args: the model-specific part of the launch command
+    # - appended to the engine's cmd
+    # - macros, ${PORT} and ${MODEL_ID} can be used here
+    # - keep ${PORT} (or set proxy explicitly) so llama-swap knows where the
+    #   server listens, exactly like in cmd
+    args: |
+      --port ${PORT}
+      --model /models/Saluki-27B-MTP.gguf
+      --ctx-size 32768
 
   # Unlisted model example:
   "unlisted-model":
