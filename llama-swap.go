@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/mostlygeek/llama-swap/docs"
 	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/discovery"
 	"github.com/mostlygeek/llama-swap/internal/docagent"
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/hw"
@@ -114,7 +117,134 @@ func runValidate(configPath, configDir string, out io.Writer) int {
 	return 0
 }
 
+// runDiscover implements `llama-swap discover`: scan the config's
+// discovery.folders for .gguf files and print, per file, the extracted
+// GGUF metadata, the chosen engine (and why), and a draft model stanza that
+// passes config validation. It reads only: the config file is never written
+// and nothing is started. Exit code 0 when the scan ran; 1 on config
+// errors or when no folders are configured.
+func runDiscover(args []string, out io.Writer) int {
+	fs := flag.NewFlagSet("discover", flag.ContinueOnError)
+	fs.SetOutput(out)
+	configPath := fs.String("config", "", "path to config file")
+	configDir := fs.String("config-dir", "", "directory of *.yml/*.yaml config files (additive to -config)")
+	jsonOut := fs.Bool("json", false, "print the scan report as JSON")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if *configPath == "" && *configDir == "" {
+		fmt.Fprintln(out, "discover: at least one of -config or -config-dir must be provided")
+		return 1
+	}
+
+	cfg, err := config.LoadConfigSources(*configPath, *configDir)
+	if err != nil {
+		fmt.Fprintf(out, "discover: config error: %v\n", err)
+		return 1
+	}
+
+	result, err := discovery.Run(cfg)
+	if err != nil {
+		fmt.Fprintf(out, "discover: %v\n", err)
+		return 1
+	}
+
+	if *jsonOut {
+		encoded, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			fmt.Fprintf(out, "discover: encoding report: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(out, string(encoded))
+		return 0
+	}
+
+	printDiscoverReport(result, out)
+	return 0
+}
+
+// printDiscoverReport renders the human-readable per-file report: metadata,
+// engine choice, draft stanza, skip reasons, and the summary line.
+func printDiscoverReport(result discovery.ScanResult, out io.Writer) {
+	for _, fr := range result.Results {
+		fmt.Fprintf(out, "== %s\n", fr.Path)
+
+		if fr.Metadata == nil {
+			fmt.Fprintf(out, "   metadata: unavailable: %s\n", fr.MetadataError)
+		} else {
+			m := fr.Metadata
+			fmt.Fprintf(out, "   gguf v%d, arch %q", m.GGUFVersion, m.Architecture)
+			if m.Type != "" {
+				fmt.Fprintf(out, ", type %q", m.Type)
+			}
+			fmt.Fprintf(out, ", quant %q\n", quantOrUnknown(m.QuantHint))
+			fmt.Fprintf(out, "   ctx %s, blocks %s, heads %s / kv %s, experts %s (used %s)%s\n",
+				intOrUnknown(m.ContextLength), intOrUnknown(m.BlockCount),
+				intOrUnknown(m.HeadCount), intOrUnknown(m.HeadCountKV),
+				intOrUnknown(m.ExpertCount), intOrUnknown(m.ExpertUsedCount),
+				moeTag(m.MoE))
+			fmt.Fprintf(out, "   file size %d bytes\n", m.FileSize)
+			if len(m.MTPKeys) > 0 {
+				fmt.Fprintf(out, "   multi-token-prediction keys: %s\n", formatMTPKeys(m.MTPKeys))
+			}
+		}
+
+		if fr.Draft != nil {
+			fmt.Fprintf(out, "   engine: %s (%s)\n", fr.Draft.Engine, fr.EngineSource)
+			if fr.Draft.CtxSize > 0 {
+				capped := ""
+				if fr.Draft.CtxCapped {
+					capped = " (capped from " + intOrUnknown(fr.Metadata.ContextLength) + ")"
+				}
+				fmt.Fprintf(out, "   ctx-size: %s%s\n", intOrUnknown(fr.Draft.CtxSize), capped)
+			}
+			fmt.Fprintf(out, "   draft (paste under models:):\n%s\n", fr.Draft.YAML)
+		} else {
+			fmt.Fprintf(out, "   skipped: %s\n", fr.SkipReason)
+		}
+		fmt.Fprintln(out)
+	}
+	fmt.Fprintf(out, "discovery: %s\n", result.SummaryLine())
+}
+
+func quantOrUnknown(hint string) string {
+	if hint == "" {
+		return "?"
+	}
+	return hint
+}
+
+func intOrUnknown(v int64) string {
+	if v == 0 {
+		return "?"
+	}
+	return fmt.Sprintf("%d", v)
+}
+
+func moeTag(moe bool) string {
+	if moe {
+		return " [MoE]"
+	}
+	return ""
+}
+
+func formatMTPKeys(keys map[string]any) string {
+	names := make([]string, 0, len(keys))
+	for name := range keys {
+		names = append(names, fmt.Sprintf("%s=%v", name, keys[name]))
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
 func main() {
+	// `llama-swap discover` is a subcommand with its own flags; dispatch it
+	// before the server's flag set so `discover -config X --json` parses.
+	if len(os.Args) > 1 && os.Args[1] == "discover" {
+		os.Exit(runDiscover(os.Args[2:], os.Stdout))
+	}
+
 	flagConfig := flag.String("config", "", "path to config file")
 	flagConfigDir := flag.String("config-dir", "", "directory of *.yml/*.yaml config files (additive to -config)")
 	flagListen := flag.String("listen", "", "listen address (default :8080 or :8443 for TLS)")
