@@ -218,6 +218,7 @@ var agentRoutePaths = []struct {
 	{"POST", "/agent/v1/scan"},
 	{"GET", "/agent/v1/engines"},
 	{"POST", "/agent/v1/draft"},
+	{"POST", "/agent/v1/refine"},
 	{"POST", "/agent/v1/validate"},
 	{"POST", "/agent/v1/apply"},
 }

@@ -15,6 +15,8 @@
 //	POST /agent/v1/scan      run discovery over the configured folders
 //	GET  /agent/v1/engines   list defined engines (env keys only, never values)
 //	POST /agent/v1/draft      draft a model stanza for one model file
+//	POST /agent/v1/refine     draft + refine a stanza (LLM-assisted when
+//	                          the draft_assistant section is enabled)
 //	POST /agent/v1/validate   validate a model stanza or full config, no side effects
 //	POST /agent/v1/apply      merge an approved model stanza into the config file
 package agentapi
@@ -34,6 +36,7 @@ import (
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/discovery"
+	"github.com/mostlygeek/llama-swap/internal/draftassistant"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 )
 
@@ -86,6 +89,7 @@ func Register(mux *http.ServeMux, opts Options) {
 	inner.HandleFunc("POST /agent/v1/scan", a.handleScan)
 	inner.HandleFunc("GET /agent/v1/engines", a.handleEngines)
 	inner.HandleFunc("POST /agent/v1/draft", a.handleDraft)
+	inner.HandleFunc("POST /agent/v1/refine", a.handleRefine)
 	inner.HandleFunc("POST /agent/v1/validate", a.handleValidate)
 	inner.HandleFunc("POST /agent/v1/apply", a.handleApply)
 	// Unknown /agent/v1 paths get a JSON 404 from this API rather than
@@ -373,6 +377,99 @@ func (a *api) handleDraft(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, r, http.StatusOK, draftToDTO(draft))
+}
+
+// refineResponse is the wire shape of POST /agent/v1/refine: the draft
+// (refined when refined is true, the untouched rule-based draft
+// otherwise) plus the refinement outcome. A fallback is a 200: the
+// draft is usable either way and reason explains the difference.
+type refineResponse struct {
+	draftDTO
+
+	// Refined is true when the LLM's answer passed every gate and is
+	// what the draft fields carry.
+	Refined bool `json:"refined"`
+
+	// Reason explains a fallback; empty when refined.
+	Reason string `json:"reason,omitempty"`
+}
+
+// handleRefine drafts a stanza for one model file and refines it. When
+// the config enables the `draft_assistant:` section the refinement is
+// LLM-assisted (internal/draftassistant): the provider's answer must
+// parse as YAML, match the model-stanza schema and pass the full config
+// validation, or the rule-based draft comes back with the reason in
+// reason. Without that section the F2 DraftRefiner seam is honored when
+// wired. Read-only: nothing is ever applied here.
+func (a *api) handleRefine(w http.ResponseWriter, r *http.Request) {
+	var req draftRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" {
+		writeError(w, r, http.StatusBadRequest, `"path" is required`)
+		return
+	}
+
+	meta, err := discovery.ReadMetadata(req.Path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			writeError(w, r, http.StatusNotFound, "model file not found")
+			return
+		}
+		writeError(w, r, http.StatusUnprocessableEntity, "could not parse model file: "+err.Error())
+		return
+	}
+
+	rule, err := discovery.DraftForFile(a.cfg, meta)
+	if err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	var draft discovery.Draft
+	var refined bool
+	var reason string
+	switch {
+	case a.cfg.DraftAssistant != nil && a.cfg.DraftAssistant.Enabled:
+		outcome, err := draftassistant.Refine(r.Context(), a.cfg, meta, rule)
+		if err != nil {
+			// Configuration-class problems (key env var not set,
+			// ...) are 422s, not fallbacks: the operator must fix
+			// them, and the error says what.
+			writeError(w, r, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		draft, refined, reason = outcome.Draft, outcome.Refined, outcome.Reason
+
+	case DraftRefiner != nil:
+		// The F2 seam: refinement wired by the embedder (tests,
+		// heuristics) when no draft_assistant section is configured.
+		draft, err = DraftRefiner(a.cfg, meta, rule)
+		if err != nil {
+			writeError(w, r, http.StatusUnprocessableEntity, "draft refinement failed: "+err.Error())
+			return
+		}
+		refined = true
+
+	default:
+		writeError(w, r, http.StatusBadRequest, "refinement is not configured: enable the draft_assistant section (see docs/kb/guides/configuration/draft-assistant.md) or wire a DraftRefiner")
+		return
+	}
+
+	// The hard gate: whatever produced the draft, it must still pass
+	// the same validation as any config before it is handed out.
+	if err := draft.ValidateAgainst(a.cfg); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	writeJSON(w, r, http.StatusOK, refineResponse{
+		draftDTO: draftToDTO(draft),
+		Refined:  refined,
+		Reason:   reason,
+	})
 }
 
 // validationResponse is the wire shape of POST /agent/v1/validate.
