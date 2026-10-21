@@ -1,6 +1,6 @@
 <script lang="ts">
   import { link } from "svelte-spa-router";
-  import { FerrisWheel, Boxes, Activity, Cat, ScrollText, Gauge, Cpu, Sun, Moon, Monitor, ChevronRight, Settings, CircleQuestionMark } from "@lucide/svelte";
+  import { FerrisWheel, Boxes, Activity, Cat, ScrollText, Gauge, Cpu, Sun, Moon, Monitor, ChevronRight, Settings, CircleQuestionMark, Wrench, FolderSearch } from "@lucide/svelte";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -183,6 +183,28 @@
                 </Sidebar.MenuSub>
               </Collapsible.Content>
             </Collapsible.Root>
+          </Sidebar.MenuItem>
+
+          <Sidebar.MenuItem>
+            <Sidebar.MenuButton isActive={isActive("/engines", $currentRoute)} tooltipContent="Engines">
+              {#snippet child({ props })}
+                <a href="/engines" use:link {...props}>
+                  <Wrench />
+                  <span>Engines</span>
+                </a>
+              {/snippet}
+            </Sidebar.MenuButton>
+          </Sidebar.MenuItem>
+
+          <Sidebar.MenuItem>
+            <Sidebar.MenuButton isActive={isActive("/discovery", $currentRoute)} tooltipContent="Discovery">
+              {#snippet child({ props })}
+                <a href="/discovery" use:link {...props}>
+                  <FolderSearch />
+                  <span>Discovery</span>
+                </a>
+              {/snippet}
+            </Sidebar.MenuButton>
           </Sidebar.MenuItem>
 
           <Sidebar.MenuItem>
