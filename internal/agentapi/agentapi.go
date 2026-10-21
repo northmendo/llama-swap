@@ -14,6 +14,10 @@
 //
 //	POST /agent/v1/scan      run discovery over the configured folders
 //	GET  /agent/v1/engines   list defined engines (env keys only, never values)
+//	GET  /agent/v1/engines/updates     engine update state (check results)
+//	GET  /agent/v1/engines/{name}/running   models up on one engine
+//	POST /agent/v1/engines/{name}/stop      stop those models
+//	POST /agent/v1/engines/{name}/update    check; swap only when approved
 //	POST /agent/v1/draft      draft a model stanza for one model file
 //	POST /agent/v1/refine     draft + refine a stanza (LLM-assisted when
 //	                          the draft_assistant section is enabled)
@@ -37,6 +41,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/discovery"
 	"github.com/mostlygeek/llama-swap/internal/draftassistant"
+	"github.com/mostlygeek/llama-swap/internal/engineupdate"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 )
 
@@ -58,6 +63,17 @@ type Options struct {
 	ConfigPath  func() string
 	WatchConfig func() bool
 	Logger      *logmon.Monitor
+
+	// EngineStatePath returns the engine updater's JSON state file,
+	// read per request like ConfigPath. Empty means the engine update
+	// routes that need state answer 503 until main wires one in.
+	EngineStatePath func() string
+
+	// Runtime is the running-models view the update routes use to
+	// refuse swaps under running models and to stop them on force.
+	// Nil disables it: checks and state still work, but an approved
+	// update cannot verify models and always requires force.
+	Runtime engineupdate.Runtime
 }
 
 // api is the mounted handler set. It is immutable after construction,
@@ -88,6 +104,10 @@ func Register(mux *http.ServeMux, opts Options) {
 	inner := http.NewServeMux()
 	inner.HandleFunc("POST /agent/v1/scan", a.handleScan)
 	inner.HandleFunc("GET /agent/v1/engines", a.handleEngines)
+	inner.HandleFunc("GET /agent/v1/engines/updates", a.handleEngineUpdates)
+	inner.HandleFunc("GET /agent/v1/engines/{name}/running", a.handleEngineRunning)
+	inner.HandleFunc("POST /agent/v1/engines/{name}/stop", a.handleEngineStop)
+	inner.HandleFunc("POST /agent/v1/engines/{name}/update", a.handleEngineUpdate)
 	inner.HandleFunc("POST /agent/v1/draft", a.handleDraft)
 	inner.HandleFunc("POST /agent/v1/refine", a.handleRefine)
 	inner.HandleFunc("POST /agent/v1/validate", a.handleValidate)

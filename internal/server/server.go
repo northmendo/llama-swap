@@ -77,6 +77,12 @@ type Server struct {
 	configPath  string
 	watchConfig bool
 
+	// engineStatePath is where the engine updater keeps its JSON state,
+	// next to the -config file (or inside -config-dir). Set by main
+	// after New; empty disables the agent API's engine update routes
+	// that need state (503).
+	engineStatePath string
+
 	local router.LocalRouter
 	peer  router.Router
 
@@ -103,6 +109,14 @@ func (s *Server) SetTailcatAddress(address string) {
 func (s *Server) SetConfigSource(configPath string, watchConfig bool) {
 	s.configPath = configPath
 	s.watchConfig = watchConfig
+}
+
+// SetEngineStatePath tells the agent API's engine update routes where
+// the engine updater keeps its JSON state (next to the -config file, or
+// inside -config-dir). Called by main after every Server construction,
+// including the hot-reload ones; empty leaves those routes disabled.
+func (s *Server) SetEngineStatePath(path string) {
+	s.engineStatePath = path
 }
 
 func (s *Server) TailcatAddress() string {
@@ -481,10 +495,12 @@ func (s *Server) routes() {
 	// SetConfigSource after this Server is built (mirroring how
 	// SetTailcatAddress is handled).
 	agentapi.Register(mux, agentapi.Options{
-		Cfg:         s.cfg,
-		ConfigPath:  func() string { return s.configPath },
-		WatchConfig: func() bool { return s.watchConfig },
-		Logger:      s.logs.ProxyLogs,
+		Cfg:             s.cfg,
+		ConfigPath:      func() string { return s.configPath },
+		WatchConfig:     func() bool { return s.watchConfig },
+		EngineStatePath: func() string { return s.engineStatePath },
+		Runtime:         newEngineRuntime(s.cfg, s.local),
+		Logger:          s.logs.ProxyLogs,
 	})
 
 	s.mux = mux

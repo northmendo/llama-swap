@@ -25,6 +25,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/discovery"
 	"github.com/mostlygeek/llama-swap/internal/docagent"
 	"github.com/mostlygeek/llama-swap/internal/draftassistant"
+	"github.com/mostlygeek/llama-swap/internal/engineupdate"
 	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/hw"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
@@ -318,10 +319,15 @@ func formatMTPKeys(keys map[string]any) string {
 }
 
 func main() {
-	// `llama-swap discover` is a subcommand with its own flags; dispatch it
-	// before the server's flag set so `discover -config X --json` parses.
+	// `llama-swap discover` and `llama-swap engines` are subcommands
+	// with their own flags; dispatch them before the server's flag set
+	// so `discover -config X --json` and `engines check -config X`
+	// parse.
 	if len(os.Args) > 1 && os.Args[1] == "discover" {
 		os.Exit(runDiscover(os.Args[2:], os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "engines" {
+		os.Exit(runEngines(os.Args[2:], os.Stdout))
 	}
 
 	flagConfig := flag.String("config", "", "path to config file")
@@ -464,6 +470,14 @@ func main() {
 	}
 	initialSrv.SetConfigSource(*flagConfig, *flagWatchConfig)
 
+	// The engine updater keeps its state beside the config source; the
+	// agent API's engine update routes read it through this path.
+	engineStateSource := *flagConfig
+	if engineStateSource == "" {
+		engineStateSource = *flagConfigDir
+	}
+	initialSrv.SetEngineStatePath(engineupdate.DefaultStatePath(engineStateSource))
+
 	// activeSrv is swapped atomically during hot reload.
 	var activeMu sync.RWMutex
 	activeSrv := initialSrv
@@ -574,6 +588,7 @@ func main() {
 			return
 		}
 		newSrv.SetConfigSource(*flagConfig, *flagWatchConfig)
+		newSrv.SetEngineStatePath(engineupdate.DefaultStatePath(engineStateSource))
 
 		if currentTailcat != nil {
 			newSrv.SetTailcatAddress(currentTailcat.Address())
