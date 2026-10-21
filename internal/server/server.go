@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mostlygeek/llama-swap/internal/agentapi"
 	"github.com/mostlygeek/llama-swap/internal/capcompat"
 	"github.com/mostlygeek/llama-swap/internal/chain"
 	"github.com/mostlygeek/llama-swap/internal/config"
@@ -69,6 +70,13 @@ type Server struct {
 	profileMu     sync.RWMutex
 	activeProfile string
 
+	// configPath is the -config file the agent API's apply endpoint
+	// merges into; watchConfig records --watch-config, which reloads the
+	// file automatically after an apply. Set by main after New; empty
+	// configPath disables apply's write path (409).
+	configPath  string
+	watchConfig bool
+
 	local router.LocalRouter
 	peer  router.Router
 
@@ -84,6 +92,17 @@ type Server struct {
 func (s *Server) SetTailcatAddress(address string) {
 	value := address
 	s.tailcatAddress.Store(&value)
+}
+
+// SetConfigSource tells the agent API which config file apply should
+// merge into (the -config flag; empty when llama-swap runs with
+// -config-dir only, which disables apply's write path) and whether
+// --watch-config is on (which reloads the file automatically after an
+// apply). Called by main after every Server construction, including the
+// hot-reload ones.
+func (s *Server) SetConfigSource(configPath string, watchConfig bool) {
+	s.configPath = configPath
+	s.watchConfig = watchConfig
 }
 
 func (s *Server) TailcatAddress() string {
@@ -452,6 +471,21 @@ func (s *Server) routes() {
 	// Registered without a method so non-POST reaches the handler and gets a
 	// 405 with Allow, rather than the mux's bare 404.
 	mux.Handle("/api/mcp", apiChain.ThenFunc(s.handleAPIMCP))
+
+	// Agent API (/agent/v1/...): bearer-authenticated discovery/config
+	// surface for automation. Register mounts nothing when the config's
+	// `agent_api:` section is absent or disabled, so those paths 404.
+	// It sits outside apiChain on purpose: it authenticates with its
+	// own dedicated bearer key (constant-time), independent of apiKeys.
+	// ConfigPath/WatchConfig are read per request: main sets them via
+	// SetConfigSource after this Server is built (mirroring how
+	// SetTailcatAddress is handled).
+	agentapi.Register(mux, agentapi.Options{
+		Cfg:         s.cfg,
+		ConfigPath:  func() string { return s.configPath },
+		WatchConfig: func() bool { return s.watchConfig },
+		Logger:      s.logs.ProxyLogs,
+	})
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.logs.HttpLogs), CreateCORSMiddleware(s.cfg)).Then(mux)

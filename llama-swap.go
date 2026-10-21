@@ -383,6 +383,7 @@ func main() {
 		initialStore.Close()
 		os.Exit(1)
 	}
+	initialSrv.SetConfigSource(*flagConfig, *flagWatchConfig)
 
 	// activeSrv is swapped atomically during hot reload.
 	var activeMu sync.RWMutex
@@ -493,6 +494,7 @@ func main() {
 			}
 			return
 		}
+		newSrv.SetConfigSource(*flagConfig, *flagWatchConfig)
 
 		if currentTailcat != nil {
 			newSrv.SetTailcatAddress(currentTailcat.Address())
