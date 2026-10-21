@@ -249,6 +249,22 @@
                 }
             }
         },
+        "agent_api": {
+            "type": "object",
+            "description": "Enables the /agent/v1/ REST API on the running server: a bearer-authenticated JSON surface for automation (scan discovery folders, draft model stanzas, validate and apply config changes). When this section is absent or enabled is false, no /agent/v1 routes are mounted and they all return 404.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Mounts the /agent/v1/ routes on the running server's HTTP mux. Default false: the agent API is opt-in."
+                },
+                "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Bearer token every /agent/v1 request must present as `Authorization: Bearer <key>`. Required when enabled is true; must be a single token without whitespace. Compared in constant time and never rendered into responses, logs or redacted config output. ${env.VAR} macros are substituted, so the key can be provided through an environment variable."
+                }
+            }
+        },
         "healthCheckTimeout": {
             "type": "integer",
             "minimum": 15,

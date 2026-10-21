@@ -152,6 +152,12 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		return Config{}, err
 	}
 
+	// Validate a present, enabled agent_api section so a missing key fails
+	// at startup rather than at first request.
+	if err := validateAgentAPI(config.AgentAPI); err != nil {
+		return Config{}, err
+	}
+
 	// Sort model IDs for deterministic validation and normalization.
 	modelIds := make([]string, 0, len(config.Models))
 	for modelId := range config.Models {

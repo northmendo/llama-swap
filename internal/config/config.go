@@ -216,6 +216,12 @@ type Config struct {
 	// running server ignores it. See internal/config/discovery.go.
 	Discovery *DiscoveryConfig `yaml:"discovery"`
 
+	// AgentAPI enables and authenticates the /agent/v1/ REST surface on
+	// the running server. Nil when the config has no `agent_api:` section;
+	// the section defaults to disabled, in which case no /agent/v1
+	// routes are mounted. See internal/config/agentapi.go.
+	AgentAPI *AgentAPIConfig `yaml:"agent_api"`
+
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.
 	GlobalConcurrencyLimit int `yaml:"globalConcurrencyLimit"`

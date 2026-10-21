@@ -400,6 +400,27 @@ engines:
 #       field: architecture
 #       engine: "beellama"
 
+# agent_api: enables the /agent/v1/ REST API on the running server
+# - optional, default: not defined (the API is disabled)
+# - a bearer-authenticated JSON surface for automation: scan discovery
+#   folders, draft model stanzas, validate YAML, and apply an approved
+#   model stanza to this config file (merge + timestamped backup +
+#   atomic rename; see guides/api-integration/agent-api)
+# - when absent or enabled: false, no /agent/v1 routes exist at all
+#   and requests to them return 404
+#
+# agent_api:
+#   # enabled: mount the /agent/v1/ routes
+#   # - optional, default: false
+#   enabled: true
+#
+#   # key: the bearer token required by every /agent/v1 request
+#   # - required when enabled is true; must be a single token without
+#   #   whitespace, compared in constant time, never shown in responses
+#   #   or logs
+#   # - ${env.VAR} macros work, so the token can stay out of this file
+#   key: ${env.LLAMA_SWAP_AGENT_KEY}
+
 # models: a dictionary of model configurations
 # - required
 # - each key is the model's ID, used in API requests

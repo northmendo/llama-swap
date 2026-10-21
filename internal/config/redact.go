@@ -14,9 +14,10 @@ const RedactedPlaceholder = "[REDACTED]"
 // secretKeyHints are substrings matched case-insensitively against a mapping
 // key. A matching value -- and everything nested under it -- is replaced with
 // RedactedPlaceholder. This covers the structured secrets: apiKeys,
-// peers.<id>.apiKey, and any macro or metadata key named like a credential.
+// agent_api (whose key is a bearer token), peers.<id>.apiKey, and any macro
+// or metadata key named like a credential.
 var secretKeyHints = []string{
-	"apikey", "api_key", "token", "secret", "password", "passwd", "credential", "bearer",
+	"apikey", "api_key", "agent_api", "token", "secret", "password", "passwd", "credential", "bearer",
 }
 
 // secretValuePatterns match well-known credential formats wherever they land --
