@@ -10,6 +10,23 @@
   win), and `llama-swap -validate` rejects unknown engine references,
   missing binaries and non-executable binaries before anything starts.
   Models with a plain `cmd:` are unchanged.
+- Model discovery: a new top-level `discovery:` section (`enabled`,
+  `folders`, `ctxSizeCap`, `engine_rules`) configures the new read-only
+  `llama-swap discover [-config X] [--json]` subcommand. It scans the
+  configured folders for `.gguf` files, parses GGUF v2/v3 metadata with a
+  pure-stdlib reader (architecture, trained context length, block count,
+  attention heads, MoE expert counts, multi-token-prediction keys such as
+  `<arch>.nextn_predict_layers`, the quant hint from the filename, file
+  size), picks an engine via first-match-wins `engine_rules` (falling back
+  to the first defined engine), and prints a draft model stanza
+  (`engine:` + `args:` with `--port ${PORT}`, `--model`, `--ctx-size
+  min(trained ctx, ctxSizeCap)`) that has already passed the full config
+  validation. Discovery never writes the config file and never starts
+  anything; non-model GGUFs (LoRA adapters, mmproj projectors) and
+  unparseable files are reported and skipped with a summary line. The
+  `discovery:` section is validated at config load and by
+  `llama-swap -validate` (folders must exist and be readable, rule engines
+  must be defined).
 
 ## v264 (Oct 12, 2026)
 

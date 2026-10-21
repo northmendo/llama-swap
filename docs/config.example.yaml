@@ -363,6 +363,43 @@ engines:
     env:
       - "GGML_CUDA_ENABLE_UNIFIED_MEMORY=1"
 
+# discovery: configures the read-only `llama-swap discover` subcommand
+# - optional, default: not defined
+# - scans the folders (depth-first, subfolders included) for .gguf files,
+#   reads GGUF metadata and prints draft model stanzas (engine + args) that
+#   pass config validation; it never writes this file and never starts
+#   anything, and the running server ignores this section
+# - folders must exist and be readable; checked when the config is loaded
+#   and by `llama-swap -validate`
+# - run it with: llama-swap discover -config /path/to/this/config.yaml
+#   (--json prints the same report as JSON)
+#
+# discovery:
+#   # enabled: switch for tooling that wants a single flag
+#   # - optional, default: false
+#   enabled: true
+#
+#   # folders: directories scanned for .gguf files
+#   # - required to run `llama-swap discover`
+#   folders:
+#     - /mnt/storage/LLM/models
+#
+#   # ctxSizeCap: caps the drafted --ctx-size at
+#   # min(trained GGUF context length, ctxSizeCap)
+#   # - optional, default: 32768
+#   ctxSizeCap: 32768
+#
+#   # engine_rules: ordered regex-to-engine mappings, first match wins
+#   # - optional, default: []
+#   # - with no matching rule the first engine defined above is used
+#   # - each rule's engine must be a defined engine; checked at load
+#   engine_rules:
+#     - match: "MTP"
+#       engine: "beellama"
+#     - match: "qwen3"
+#       field: architecture
+#       engine: "beellama"
+
 # models: a dictionary of model configurations
 # - required
 # - each key is the model's ID, used in API requests

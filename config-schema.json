@@ -190,6 +190,65 @@
                 }
             }
         },
+        "discovery": {
+            "type": "object",
+            "description": "Configures the `llama-swap discover` subcommand: folders scanned for .gguf files and rules mapping them to engines. Discovery reads GGUF metadata and prints draft model stanzas; it never writes the config file and the running server ignores this section.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Switch for tooling that wants a single flag to turn discovery on. The `llama-swap discover` subcommand works regardless; the running server does not read this yet."
+                },
+                "folders": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "default": [],
+                    "description": "Directories scanned (depth-first, subfolders included) for .gguf files. Each must exist and be readable; checked when the config is loaded and by `llama-swap -validate`."
+                },
+                "ctxSizeCap": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 32768,
+                    "description": "Caps the drafted --ctx-size at min(trained GGUF context length, this value). A file with no context length gets no --ctx-size line."
+                },
+                "engine_rules": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Ordered list of regex-to-engine mappings, evaluated first-match-wins before falling back to the first defined engine. Each rule's engine must be a defined engine.",
+                    "items": {
+                        "type": "object",
+                        "required": [
+                            "match",
+                            "engine"
+                        ],
+                        "properties": {
+                            "match": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Go-syntax regular expression, matched unanchored against the value chosen by field."
+                            },
+                            "field": {
+                                "type": "string",
+                                "enum": [
+                                    "filename",
+                                    "architecture"
+                                ],
+                                "default": "filename",
+                                "description": "What match is tested against: the .gguf file's base name (default) or the GGUF general.architecture value."
+                            },
+                            "engine": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Name of the engines section entry the draft will reference."
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "healthCheckTimeout": {
             "type": "integer",
             "minimum": 15,
