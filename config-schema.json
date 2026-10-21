@@ -265,6 +265,48 @@
                 }
             }
         },
+        "draft_assistant": {
+            "type": "object",
+            "description": "Optional, disabled-by-default LLM-assisted refinement of discovery drafts (`llama-swap discover --refine` and POST /agent/v1/refine). The GGUF metadata, the rule-based draft, the defined engines and the conventions block are sent to an OpenAI-compatible chat-completions endpoint; the answer must parse as YAML, match the model-stanza schema and pass the same validation as any config, or the rule-based draft is returned with the reason. Tooling-only: the running server's proxy and swap behavior never reads it, and refinement only ever produces a draft — nothing is applied automatically. The provider API key is never stored here: key_env names the environment variable that holds it, read at call time.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Turns draft refinement on. Default false: without it `llama-swap discover --refine` refuses to run and POST /agent/v1/refine answers 400."
+                },
+                "api_base": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Base URL of an OpenAI-compatible /v1 endpoint; the provider call posts to api_base + /chat/completions. Required when enabled. May point at llama-swap itself (e.g. http://localhost:8000/v1) with an always-on local model, so no external provider is required."
+                },
+                "key_env": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "NAME of the environment variable holding the provider API key (e.g. OPENAI_API_KEY). Required when enabled. The key itself must not be stored in the config file; it is read from the environment at call time and is never logged or echoed."
+                },
+                "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The chat model refinement requests are sent to: a provider model name, or a llama-swap model ID when api_base points at llama-swap itself. Required when enabled."
+                },
+                "timeout": {
+                    "type": "string",
+                    "default": "60s",
+                    "description": "Duration string bounding one refinement request, provider side included (e.g. 60s, 2m). On expiry the rule-based draft is used and the timeout is reported as the reason."
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 2048,
+                    "description": "The chat-completions max_tokens sent with every refinement request."
+                },
+                "conventions": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional free-text house rules the refined drafts should follow (preferred flags, ctx-size policy, naming). Sent to the model verbatim as part of the prompt."
+                }
+            }
+        },
         "healthCheckTimeout": {
             "type": "integer",
             "minimum": 15,

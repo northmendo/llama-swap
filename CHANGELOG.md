@@ -2,6 +2,30 @@
 
 ## Unreleased (fork)
 
+- Draft assistant: a new top-level `draft_assistant:` section
+  (`enabled`, `api_base`, `key_env`, `model`, `timeout`, `max_tokens`,
+  `conventions`) adds optional, disabled-by-default LLM-assisted
+  refinement of discovery drafts to `llama-swap discover --refine` and
+  `POST /agent/v1/refine`. The refinement sends the extracted GGUF
+  metadata, the rule-based draft, the defined engines (cmd lines and
+  labels; env names only, never values) and the user's free-text
+  conventions to any OpenAI-compatible chat-completions endpoint —
+  which can be llama-swap itself (an always-on local model behind its
+  own /v1 proxy), so no external provider is required. The model's
+  answer is never trusted: it must parse as YAML, match the
+  model-stanza schema (strict decoding rejects unknown fields) and
+  pass the SAME validation as any config (unknown engine, bad launch
+  command, missing ${PORT} all reject); on any parse, schema,
+  validation, provider or timeout failure the untouched rule-based
+  draft is returned with the reason, and nothing is ever applied
+  automatically — refinement only produces a draft. The API key is
+  never stored in the config file: `key_env` names the environment
+  variable that holds it, read at call time, never logged or echoed,
+  and redacted from any provider error text that could contain it. A
+  missing key variable surfaces as a configuration error (CLI report
+  line / agent API 422), not a silent fallback. An enabled but
+  misconfigured section fails at config load and `llama-swap
+  -validate` with per-field errors.
 - Agent REST API: a new top-level `agent_api:` section (`enabled`,
   `key`) mounts a disabled-by-default, bearer-authenticated JSON API at
   `/agent/v1/` on the running server for automation that needs to drive

@@ -421,6 +421,61 @@ engines:
 #   # - ${env.VAR} macros work, so the token can stay out of this file
 #   key: ${env.LLAMA_SWAP_AGENT_KEY}
 
+# draft_assistant: optional LLM-assisted refinement of discovery drafts
+# - optional, default: not defined (refinement is disabled)
+# - `llama-swap discover --refine` and POST /agent/v1/refine send the
+#   GGUF metadata, the rule-based draft, the defined engines and your
+#   conventions block to an OpenAI-compatible chat endpoint and ask for
+#   a better stanza; the answer must parse as YAML and pass the same
+#   validation as any config, or the rule-based draft is used and the
+#   reason reported (see guides/configuration/draft-assistant)
+# - refinement never writes this file and never starts anything; the
+#   running server ignores this section entirely
+# - the API key is NEVER stored here: key_env names the environment
+#   variable that holds it, read at call time and never logged or echoed
+# - api_base can point at llama-swap itself (an always-on local model),
+#   so no external provider is required
+#
+# draft_assistant:
+#   # enabled: turn draft refinement on
+#   # - optional, default: false
+#   enabled: true
+#
+#   # api_base: base URL of an OpenAI-compatible /v1 endpoint
+#   # - required when enabled; calls post to api_base/chat/completions
+#   # - an external provider: https://api.openai.com/v1
+#   # - or llama-swap itself (below, an always-on local model served by
+#   #   this very config on port 8000):
+#   api_base: http://localhost:8000/v1
+#
+#   # key_env: NAME of the environment variable holding the API key
+#   # - required when enabled; the key is read at call time and never
+#   #   written to this file, logs or responses
+#   # - when api_base points at llama-swap itself any non-empty value
+#   #   works (llama-swap does not require a bearer token on /v1)
+#   key_env: OPENAI_API_KEY
+#
+#   # model: the chat model asked to refine
+#   # - required when enabled; a provider model name, or a llama-swap
+#   #   model ID when api_base points at llama-swap itself
+#   model: qwen3-8b
+#
+#   # timeout: bound for one refinement request, provider side included
+#   # - optional, default: 60s
+#   # - on expiry the rule-based draft is used and the timeout reported
+#   timeout: 60s
+#
+#   # max_tokens: chat-completions max_tokens for refinement requests
+#   # - optional, default: 2048
+#   max_tokens: 2048
+#
+#   # conventions: free-text house rules sent to the model verbatim
+#   # - optional, default: ""
+#   conventions: |
+#     Prefer --flash-attn on every model that supports it.
+#     Keep --ctx-size at or below 32768 for Q4 quants.
+#     Always use --jinja for chat models.
+
 # models: a dictionary of model configurations
 # - required
 # - each key is the model's ID, used in API requests

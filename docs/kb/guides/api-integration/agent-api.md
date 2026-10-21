@@ -147,6 +147,40 @@ Response: the same `draft` object as in a scan result (shown above).
 GGUF model, no engine can be picked, or the draft would not pass config
 validation.
 
+### POST /agent/v1/refine
+
+Drafts a stanza for one model file and refines it — the HTTP form of
+`llama-swap discover --refine`. The request body is the same
+`{"path": "..."}` as draft. When the config enables the
+`draft_assistant:` section (see `guides/configuration/draft-assistant`),
+the refinement is LLM-assisted; without it the route answers `400`.
+
+```bash
+curl -s -X POST -H "$AUTH" -d '{"path": "/models/tiny-Q4_K_M.gguf"}' $BASE/refine
+```
+
+```json
+{
+  "modelId": "tiny-q4-k-m",
+  "engine": "beellama",
+  "engineSource": "draft_assistant refinement (model gpt-4o-mini)",
+  "args": "--port ${PORT}\n--model /models/tiny-Q4_K_M.gguf\n--ctx-size 4096\n--flash-attn",
+  "ctxSize": 4096,
+  "ctxCapped": false,
+  "yaml": "  tiny-q4-k-m:\n    engine: beellama\n    args: |\n      ...",
+  "refined": true
+}
+```
+
+The LLM's answer is never trusted: it must parse as YAML, match the
+model-stanza schema and pass the same validation as any config. When it
+does not — or the provider errors or times out — the response is still
+a 200 with the **rule-based** draft, `refined: false` and the reason in
+`reason`. Nothing is ever applied by this route; hand the stanza to a
+human (or to `/agent/v1/validate` and `/agent/v1/apply`) afterwards.
+A missing `draft_assistant.key_env` environment variable is a `422`,
+not a fallback.
+
 ### POST /agent/v1/validate
 
 Validates YAML with no side effects. The `yaml` field holds either:
