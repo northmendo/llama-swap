@@ -130,6 +130,28 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		return Config{}, err
 	}
 
+	// Capture the engines section's definition order from the YAML
+	// document. Discovery needs the *first defined* engine as its default
+	// draft engine, and the Engines map has no order. config-dir merges
+	// re-marshal the merged yaml.Node, so the order survives that path
+	// too; on any parse failure the fallback is sorted order.
+	var enginesDoc struct {
+		Engines yaml.Node `yaml:"engines"`
+	}
+	if err := yaml.Unmarshal([]byte(yamlStr), &enginesDoc); err == nil &&
+		enginesDoc.Engines.Kind == yaml.MappingNode {
+		content := enginesDoc.Engines.Content
+		for i := 0; i+1 < len(content); i += 2 {
+			config.EnginesOrder = append(config.EnginesOrder, content[i].Value)
+		}
+	}
+
+	// Validate a present discovery section after engines, so rule engine
+	// references can be checked against the defined engines.
+	if err := validateDiscovery(config.Discovery, config.Engines); err != nil {
+		return Config{}, err
+	}
+
 	// Sort model IDs for deterministic validation and normalization.
 	modelIds := make([]string, 0, len(config.Models))
 	for modelId := range config.Models {

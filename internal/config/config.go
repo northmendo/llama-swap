@@ -203,6 +203,19 @@ type Config struct {
 	// config load. See internal/config/engines.go.
 	Engines map[string]EngineConfig `yaml:"engines"`
 
+	// EnginesOrder lists the engine names in the order they were defined in
+	// the YAML document. Discovery uses it to pick the "first defined
+	// engine" as the default draft engine. Populated by
+	// LoadConfigFromReader; empty when no engines are defined. New code
+	// must not treat it as the set of engines (use Engines for that).
+	EnginesOrder []string `yaml:"-"`
+
+	// Discovery configures the `llama-swap discover` subcommand: folders to
+	// scan for .gguf files and rules that map them to engines. Nil when the
+	// config has no `discovery:` section. It is tooling-only config: the
+	// running server ignores it. See internal/config/discovery.go.
+	Discovery *DiscoveryConfig `yaml:"discovery"`
+
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.
 	GlobalConcurrencyLimit int `yaml:"globalConcurrencyLimit"`
