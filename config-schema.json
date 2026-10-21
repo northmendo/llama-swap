@@ -186,6 +186,51 @@
                         },
                         "default": [],
                         "description": "Environment variables applied to every model using this engine, in ENV_NAME=value format. Model-level env entries with the same name win."
+                    },
+                    "update": {
+                        "type": "object",
+                        "description": "Declares where new builds of this engine come from, so `llama-swap engines check|update|rollback` and the agent API can update the binary: download, sha256-verify, atomically swap with the previous build kept at <binary>.prev for rollback. Absent means the engine is updated by hand.",
+                        "properties": {
+                            "source": {
+                                "type": "string",
+                                "enum": [
+                                    "github",
+                                    "url"
+                                ],
+                                "description": "Update source kind: github (releases API of a repository) or url (a single direct artifact URL). Required."
+                            },
+                            "repo": {
+                                "type": "string",
+                                "minLength": 3,
+                                "description": "GitHub owner/name repository whose releases are polled (github source). Required for github."
+                            },
+                            "asset_regex": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Go regular expression, matched unanchored against release asset names; the first matching asset of the newest matching release is the update artifact. Required for github."
+                            },
+                            "tag_regex": {
+                                "type": "string",
+                                "description": "Go regular expression filtering which release tags are considered; without it the newest non-prerelease release wins. Optional (github)."
+                            },
+                            "sha256": {
+                                "type": "string",
+                                "description": "Checksum policy. github: \"auto\" (default) verifies the digest the release API exposes and requires a pinned value when a release has none; a 64-char hex string pins the checksum instead. url: the pinned hex string is REQUIRED (\"auto\" is rejected — a plain URL exposes no digest to trust)."
+                            },
+                            "url": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Direct artifact URL (url source). Required for url; http/https only."
+                            },
+                            "version": {
+                                "type": "string",
+                                "description": "Optional declared version of the currently installed binary; seeds the recorded installed version so checks can report what is newer before the updater has ever run."
+                            },
+                            "api_base": {
+                                "type": "string",
+                                "description": "GitHub API root override for GitHub Enterprise Server. Default https://api.github.com. Optional (github)."
+                            }
+                        }
                     }
                 }
             }

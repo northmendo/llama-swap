@@ -363,6 +363,41 @@ engines:
     env:
       - "GGML_CUDA_ENABLE_UNIFIED_MEMORY=1"
 
+    # update: declare where new builds of this engine come from, so
+    # `llama-swap engines check|update|rollback` and the agent API's
+    # engine update routes can update the binary in place: download,
+    # sha256-verify, atomically swap, keep the previous build at
+    # <binary>.prev for a one-command rollback
+    # - optional, default: not defined (the engine is updated by hand)
+    # - source: github or url, required
+    # - github: repo is the owner/name slug, asset_regex (required) picks
+    #   the release asset, tag_regex (optional) filters releases, sha256
+    #   defaults to "auto" (verify the digest the GitHub release API
+    #   exposes; a pin is required when a release has none), api_base
+    #   (optional) overrides the API root for GitHub Enterprise Server
+    # - url: a direct artifact URL; the pinned sha256 hex is REQUIRED
+    #   ("auto" is rejected - a plain URL exposes no digest to trust)
+    # - version: optional, declares the version of the currently
+    #   installed binary so checks can report what is newer
+    # - an update refuses while models using the engine are running;
+    #   --force stops them first and leaves them stopped
+    # - updater state lives in engine-updates.json next to the config
+    #   file (inside -config-dir when one is used)
+    # - see docs/kb/guides/operations/engine-updater.md
+    #
+    # update:
+    #   source: github
+    #   repo: "beellama/beellama"
+    #   asset_regex: "llama-server-.*-linux-amd64"
+    #   # tag_regex: "b1[0-9]{2}$"
+    #   # sha256: "auto"
+    #   version: "b12"
+    #
+    # update:
+    #   source: url
+    #   url: "https://dl.example.com/prismml/llama-server"
+    #   sha256: "5f2c14af0bb8a80ee1a53a4b0e5b1d69d9e2d0e4ff7d3a1f0e8c9d2b6a4f3e11"
+
 # discovery: configures the read-only `llama-swap discover` subcommand
 # - optional, default: not defined
 # - scans the folders (depth-first, subfolders included) for .gguf files,

@@ -2,6 +2,42 @@
 
 ## Unreleased (fork)
 
+- Engine updater: each `engines:` entry gains an optional `update:`
+  block declaring where new builds of its binary come from — a GitHub
+  releases source (`source: github`, `repo`, required `asset_regex`,
+  optional `tag_regex`, `sha256` defaulting to `auto` which verifies
+  the release API digest and requires a pin when a release has none,
+  optional `api_base` for GitHub Enterprise Server) or a direct URL
+  (`source: url`, `url`, pinned `sha256` REQUIRED — `auto` is
+  rejected there, a plain URL exposes no digest to trust), plus an
+  optional `version` seeding the installed version. Everything is
+  validated at config load and `-validate`. A JSON state file
+  (`engine-updates.json`, next to the config file or inside
+  `-config-dir`) records per engine the installed version, source,
+  last check and last update; checks are idempotent. New
+  `llama-swap engines` subcommand: `list` (label, cmd path,
+  installed version, "update available: <tag>"), `check [name]`
+  (query sources, no downloads), `update <name> [--force]`
+  (download to a temp file beside the binary, sha256 verify —
+  mismatch aborts with nothing touched — chmod +x, atomic rename
+  swap keeping the previous build at `<binary>.prev`, one slot,
+  rollback keeps the newer build in the slot so both directions are
+  reversible) and `rollback <name> [--force]`. An update or rollback
+  REFUSES while models using the engine are running; `--force`
+  stops them first — through the server's normal unload machinery
+  when the agent API is reachable, via the new
+  `GET /agent/v1/engines/{name}/running` and
+  `POST /agent/v1/engines/{name}/stop` helpers — and leaves them
+  stopped; when the CLI cannot verify that nothing is running (no
+  agent API, server down) `--force` is required to swap at all.
+  Agent API additions: `GET /agent/v1/engines/updates` (check
+  results from state) and
+  `POST /agent/v1/engines/{name}/update`, where a body of
+  `{"approved": true}` is required for any actual swap —
+  unapproved requests are check-only. Tests mock the GitHub
+  releases API and direct-URL servers with httptest only; no real
+  network is ever touched. See
+  docs/kb/guides/operations/engine-updater.md.
 - Draft assistant: a new top-level `draft_assistant:` section
   (`enabled`, `api_base`, `key_env`, `model`, `timeout`, `max_tokens`,
   `conventions`) adds optional, disabled-by-default LLM-assisted

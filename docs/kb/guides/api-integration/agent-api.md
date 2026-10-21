@@ -131,6 +131,66 @@ curl -s -H "$AUTH" $BASE/engines
 }
 ```
 
+### GET /agent/v1/engines/updates
+
+Reports the engine updater's recorded state per engine (see
+`guides/operations/engine-updater`): the installed version, the update
+source, the last check and update times, and the update a check found.
+Reads the state file only — no network.
+
+```bash
+curl -s -H "$AUTH" $BASE/engines/updates
+```
+
+```json
+{
+  "engines": [
+    {
+      "name": "beellama",
+      "label": "beellama b12",
+      "hasUpdateSource": true,
+      "source": "github",
+      "lastCheckAt": "2026-10-21T07:30:00Z",
+      "updateAvailable": { "tag": "b13", "checkedAt": "2026-10-21T07:30:00Z" }
+    }
+  ]
+}
+```
+
+### GET /agent/v1/engines/{name}/running
+
+Lists the running models that launch with the named engine. Used by
+`llama-swap engines update` to verify a swap is safe.
+
+### POST /agent/v1/engines/{name}/stop
+
+Stops those models through the normal unload machinery. They stay
+stopped — nothing is restarted into an unverified binary.
+
+### POST /agent/v1/engines/{name}/update
+
+Checks the engine's update source and — only when the body carries
+`{"approved": true}` — downloads, sha256-verifies and atomically swaps
+the binary, keeping the previous build for rollback. Without approval
+the request is check-only: nothing is downloaded, nothing is replaced.
+
+```bash
+curl -s -H "$AUTH" -d '{}' $BASE/engines/beellama/update
+curl -s -H "$AUTH" -d '{"approved": true}' $BASE/engines/beellama/update
+```
+
+An approved update is refused with **409** while models using the
+engine are running; add `"force": true` to stop them first (they are
+left stopped).
+
+```json
+{
+  "error": {
+    "message": "engine beellama: models saluki are running and would be swapped under; stop them or rerun with --force"
+  }
+}
+```
+
 ### POST /agent/v1/draft
 
 Drafts a stanza for one model file, exactly what `llama-swap discover`
