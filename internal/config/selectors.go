@@ -21,7 +21,7 @@ const DefaultSelectorFailoverCooldown = 60 * time.Second
 
 // SelectorSettings contains strategy-specific selector settings.
 type SelectorSettings struct {
-	Spillover int    `yaml:"spillover" json:"spillover"`
+	Spillover int `yaml:"spillover" json:"spillover"`
 	// Cooldown is how long a failed failover target is skipped, as a
 	// duration string (e.g. "90s", "1m30s"). Empty means
 	// DefaultSelectorFailoverCooldown.
