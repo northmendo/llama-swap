@@ -26,6 +26,17 @@
 //	                          the draft_assistant section is enabled)
 //	POST /agent/v1/validate   validate a model stanza or full config, no side effects
 //	POST /agent/v1/apply      merge an approved model stanza into the config file
+//	GET  /agent/v1/config              live config as safe JSON (keys as macros
+//	                                      or set/unset, never resolved values)
+//	POST /agent/v1/config/peers.add     add a peer (approved-gated dry run
+//	POST /agent/v1/config/peers.update   and write, full validation, backup,
+//	POST /agent/v1/config/peers.remove   atomic replace — see configverbs.go)
+//	POST /agent/v1/config/selectors.add    same contract for cascades
+//	POST /agent/v1/config/selectors.update
+//	POST /agent/v1/config/selectors.remove
+//	POST /agent/v1/config/agent_api.update enable/disable; key as ${env.VAR} only
+//	GET  /agent/v1/config/backups  list the timestamped config backups
+//	POST /agent/v1/config/restore  restore one backup (approval-gated)
 package agentapi
 
 import (
@@ -117,6 +128,16 @@ func Register(mux *http.ServeMux, opts Options) {
 	inner.HandleFunc("POST /agent/v1/refine", a.handleRefine)
 	inner.HandleFunc("POST /agent/v1/validate", a.handleValidate)
 	inner.HandleFunc("POST /agent/v1/apply", a.handleApply)
+	inner.HandleFunc("GET /agent/v1/config", a.handleConfigState)
+	inner.HandleFunc("POST /agent/v1/config/peers.add", a.handlePeerAdd)
+	inner.HandleFunc("POST /agent/v1/config/peers.update", a.handlePeerUpdate)
+	inner.HandleFunc("POST /agent/v1/config/peers.remove", a.handlePeerRemove)
+	inner.HandleFunc("POST /agent/v1/config/selectors.add", a.handleSelectorAdd)
+	inner.HandleFunc("POST /agent/v1/config/selectors.update", a.handleSelectorUpdate)
+	inner.HandleFunc("POST /agent/v1/config/selectors.remove", a.handleSelectorRemove)
+	inner.HandleFunc("POST /agent/v1/config/agent_api.update", a.handleAgentAPIUpdate)
+	inner.HandleFunc("GET /agent/v1/config/backups", a.handleConfigBackups)
+	inner.HandleFunc("POST /agent/v1/config/restore", a.handleConfigRestore)
 	// Unknown /agent/v1 paths get a JSON 404 from this API rather than
 	// the outer mux's bare-text one, so agents can parse every response.
 	inner.HandleFunc("/agent/v1/", func(w http.ResponseWriter, r *http.Request) {
