@@ -274,11 +274,167 @@ export async function applyModel(
   return agentRequest<ApplyResponse>("POST", "/agent/v1/apply", { yaml, approved });
 }
 
-/**
- * POST /agent/v1/refine — draft + refine a stanza for one model file.
+/** POST /agent/v1/refine — draft + refine a stanza for one model file.
  * Rejects with a 400 AgentApiError when no draft assistant is
  * configured; callers hide the button in that case.
  */
 export async function refineDraft(path: string): Promise<RefineResponse> {
   return agentRequest<RefineResponse>("POST", "/agent/v1/refine", { path });
+}
+
+// ---------------------------------------------------------------------------
+// Config verbs (F7): the safe state view, the peer/selector/agent_api
+// write pipeline and the backup list/restore pair. Wire shapes mirror
+// internal/agentapi/configverbs.go.
+// ---------------------------------------------------------------------------
+
+/** How a key field is exposed: the ${env.VAR} macro when the config
+ * references one, plus whether any key is set. Never the value. */
+export interface SecretRef {
+  macro?: string;
+  set: boolean;
+}
+
+export interface PeerState {
+  name: string;
+  proxy: string;
+  apiKey: SecretRef;
+  tailcatKey: SecretRef;
+  models: string[];
+}
+
+export interface SelectorState {
+  name: string;
+  strategy: string;
+  targets: string[];
+  spillover: number;
+  cooldown?: string;
+  description?: string;
+  unlisted?: boolean;
+}
+
+export interface AgentAPIState {
+  enabled: boolean;
+  key: SecretRef;
+}
+
+/** GET /agent/v1/config — the whole editable surface as safe JSON. */
+export interface ConfigState {
+  peers: PeerState[];
+  selectors: SelectorState[];
+  agentApi?: AgentAPIState;
+}
+
+/** Every write verb answers with this, for the dry run and the apply. */
+export interface ConfigWriteResponse {
+  status: "pending" | "applied";
+  approved: boolean;
+  written: boolean;
+  reloadRequired: boolean;
+  backup?: string;
+  message?: string;
+  config?: ConfigState;
+}
+
+/** One row of GET /agent/v1/config/backups. */
+export interface ConfigBackup {
+  name: string;
+  path: string;
+  sizeBytes: number;
+  modifiedAt: string;
+}
+
+/** POST /agent/v1/config/restore. */
+export interface ConfigRestoreResponse {
+  status: "pending" | "applied";
+  approved: boolean;
+  written: boolean;
+  reloadRequired: boolean;
+  backup?: string;
+  restoredFrom?: string;
+  message?: string;
+}
+
+/** Fields for a peer add/update. Omitted fields keep their configured
+ * values; key fields accept an ${env.VAR} reference (or "" to clear) —
+ * never a literal secret, which the server rejects. */
+export interface PeerWriteInput {
+  approved: boolean;
+  name: string;
+  proxy?: string;
+  apiKey?: string;
+  tailcatKey?: string;
+  models?: string[];
+}
+
+/** Fields for a selector add/update; omitted fields keep their values. */
+export interface SelectorWriteInput {
+  approved: boolean;
+  name: string;
+  strategy?: string;
+  targets?: string[];
+  spillover?: number;
+  cooldown?: string;
+  description?: string;
+  unlisted?: boolean;
+}
+
+/** GET /agent/v1/config — the live configuration as safe JSON. */
+export async function getConfigState(): Promise<ConfigState> {
+  return agentRequest<ConfigState>("GET", "/agent/v1/config");
+}
+
+/** POST /agent/v1/config/peers.add */
+export async function addPeer(input: PeerWriteInput): Promise<ConfigWriteResponse> {
+  return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/peers.add", input);
+}
+
+/** POST /agent/v1/config/peers.update */
+export async function updatePeer(input: PeerWriteInput): Promise<ConfigWriteResponse> {
+  return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/peers.update", input);
+}
+
+/** POST /agent/v1/config/peers.remove */
+export async function removePeer(name: string, approved: boolean): Promise<ConfigWriteResponse> {
+  return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/peers.remove", { name, approved });
+}
+
+/** POST /agent/v1/config/selectors.add */
+export async function addSelector(input: SelectorWriteInput): Promise<ConfigWriteResponse> {
+  return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/selectors.add", input);
+}
+
+/** POST /agent/v1/config/selectors.update */
+export async function updateSelector(input: SelectorWriteInput): Promise<ConfigWriteResponse> {
+  return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/selectors.update", input);
+}
+
+/** POST /agent/v1/config/selectors.remove */
+export async function removeSelector(name: string, approved: boolean): Promise<ConfigWriteResponse> {
+  return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/selectors.remove", { name, approved });
+}
+
+/**
+ * POST /agent/v1/config/agent_api.update — flip enabled and/or set the
+ * key. The key only accepts an ${env.VAR} reference ("" clears it); a
+ * literal secret is rejected by the server and never sent by the UI.
+ */
+export async function updateAgentAPI(
+  input: { approved: boolean; enabled?: boolean; key?: string },
+): Promise<ConfigWriteResponse> {
+  return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/agent_api.update", input);
+}
+
+/** GET /agent/v1/config/backups — timestamped config backups, newest first. */
+export async function listConfigBackups(): Promise<ConfigBackup[]> {
+  const data = await agentRequest<{ backups: ConfigBackup[] }>("GET", "/agent/v1/config/backups");
+  return data.backups ?? [];
+}
+
+/** POST /agent/v1/config/restore — put one backup back, approval-gated. */
+export async function restoreConfigBackup(
+  name: string,
+  approved: boolean,
+): Promise<ConfigRestoreResponse> {
+  return agentRequest<ConfigRestoreResponse>("POST", "/agent/v1/config/restore", { backup: name, approved });
 }
