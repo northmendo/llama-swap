@@ -100,9 +100,16 @@
 
   onMount(load);
 
-  /** Any successful write from a panel refreshes everything. */
+  /** Any successful write from a panel refreshes everything — now and
+   * once more after the --watch-config reload window, because the
+   * server's in-memory config (which GET /agent/v1/config reads) lags
+   * the file by up to its 2-second poll interval. */
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
   function changed(): void {
     void load();
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => void load(), 2500);
   }
 
   /** Panels surface 401s through the shared token prompt. */
