@@ -221,6 +221,16 @@ var agentRoutePaths = []struct {
 	{"POST", "/agent/v1/refine"},
 	{"POST", "/agent/v1/validate"},
 	{"POST", "/agent/v1/apply"},
+	{"GET", "/agent/v1/config"},
+	{"POST", "/agent/v1/config/peers.add"},
+	{"POST", "/agent/v1/config/peers.update"},
+	{"POST", "/agent/v1/config/peers.remove"},
+	{"POST", "/agent/v1/config/selectors.add"},
+	{"POST", "/agent/v1/config/selectors.update"},
+	{"POST", "/agent/v1/config/selectors.remove"},
+	{"POST", "/agent/v1/config/agent_api.update"},
+	{"GET", "/agent/v1/config/backups"},
+	{"POST", "/agent/v1/config/restore"},
 }
 
 func TestAgentAPI_DisabledReturns404(t *testing.T) {

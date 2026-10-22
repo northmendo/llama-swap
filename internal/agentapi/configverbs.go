@@ -45,8 +45,9 @@ import (
 var envMacroRef = regexp.MustCompile(`^\$\{env\.([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
 // backupNameSuffix matches the timestamp half of a backup file name
-// (config.yaml.bak-20060102T150405Z).
-var backupNameSuffix = regexp.MustCompile(`^\d{8}T\d{6}Z$`)
+// (config.yaml.bak-20060102T150405Z, plus the -2, -3... disambiguator
+// used when several backups land in the same second).
+var backupNameSuffix = regexp.MustCompile(`^\d{8}T\d{6}Z(-\d+)?$`)
 
 // ---------------------------------------------------------------------------
 // Wire shapes
@@ -393,6 +394,11 @@ type stagedChange struct {
 	// verb names the change in log lines, e.g. "peers.add upstream".
 	verb string
 
+	// messagePrefix is prepended to the response message (both the dry
+	// run and the applied one). The agent_api disable warning uses it,
+	// because the response is written inside writeStaged.
+	messagePrefix string
+
 	// mutate stages the change on the parsed document. It returns a
 	// notFoundError (404), conflictError (409) or a plain error (500)
 	// without touching the file.
@@ -473,12 +479,13 @@ func (a *api) writeStaged(w http.ResponseWriter, r *http.Request, change stagedC
 			Message:  "change is valid and ready to apply; nothing was written. Send the same request with \"approved\": true to write it.",
 			Config:   &state,
 		}
+		resp.Message = change.messagePrefix + resp.Message
 		writeJSON(w, r, http.StatusOK, resp)
 		return resp, true
 	}
 
-	backupPath := path + ".bak-" + time.Now().UTC().Format(backupTimeFormat)
-	if err := os.WriteFile(backupPath, original, info.Mode().Perm()); err != nil {
+	backupPath, err := writeBackupFile(path, original, info.Mode().Perm())
+	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "writing config backup: "+err.Error())
 		return nil, false
 	}
@@ -501,8 +508,35 @@ func (a *api) writeStaged(w http.ResponseWriter, r *http.Request, change stagedC
 		Message:        reloadMessage(watchConfig),
 		Config:         &state,
 	}
+	resp.Message = change.messagePrefix + resp.Message
 	writeJSON(w, r, http.StatusOK, resp)
 	return resp, true
+}
+
+// writeBackupFile writes a byte-identical backup of content next to the
+// config file, using the shared .bak-<timestamp> naming convention. Two
+// backups taken in the same second get a -2, -3... suffix instead of
+// overwriting each other, so no backup is ever silently lost.
+func writeBackupFile(path string, content []byte, perm os.FileMode) (string, error) {
+	base := path + ".bak-" + time.Now().UTC().Format(backupTimeFormat)
+	backupPath := base
+	for i := 2; ; i++ {
+		_, err := os.Stat(backupPath)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if i > 999 {
+			return "", fmt.Errorf("too many config backups taken in the same second")
+		}
+		backupPath = fmt.Sprintf("%s-%d", base, i)
+	}
+	if err := os.WriteFile(backupPath, content, perm); err != nil {
+		return "", err
+	}
+	return backupPath, nil
 }
 
 // errAs is errors.As with the indirection the linter wants for the two
@@ -904,9 +938,15 @@ func (a *api) handleAgentAPIUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp, ok := a.writeStaged(w, r, stagedChange{
-		verb:     "agent_api.update",
-		approved: req.Approved,
+	a.writeStaged(w, r, stagedChange{
+		verb: "agent_api.update",
+		// Warn before the disable takes effect: after the next reload
+		// the /agent/v1 routes (including this one) are unmounted, and
+		// this API is the only way back. The prefix must ride on the
+		// staged change because the response is written inside
+		// writeStaged.
+		messagePrefix: disableWarning(req.Enabled),
+		approved:      req.Approved,
 		mutate: func(root *yaml.Node) error {
 			section := ensureSection(root, "agent_api")
 			if req.Enabled != nil {
@@ -922,11 +962,15 @@ func (a *api) handleAgentAPIUpdate(w http.ResponseWriter, r *http.Request) {
 			return nil
 		},
 	})
-	// Warn before the disable takes effect: after the next reload the
-	// /agent/v1 routes (including this one) are unmounted.
-	if ok && resp != nil && req.Enabled != nil && !*req.Enabled {
-		resp.Message = "agent_api.enabled=false was written; after the next reload the /agent/v1 routes are unmounted and this API is the only way to re-enable it. " + resp.Message
+}
+
+// disableWarning returns the unmount warning to prepend when this
+// request disables the agent API, "" otherwise.
+func disableWarning(enabled *bool) string {
+	if enabled == nil || *enabled {
+		return ""
 	}
+	return "agent_api.enabled=false was written; after the next reload the /agent/v1 routes are unmounted and this API is the only way to re-enable it. "
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,8 +1116,8 @@ func (a *api) handleConfigRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	safetyPath := path + ".bak-" + time.Now().UTC().Format(backupTimeFormat)
-	if err := os.WriteFile(safetyPath, current, info.Mode().Perm()); err != nil {
+	safetyPath, err := writeBackupFile(path, current, info.Mode().Perm())
+	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "writing config backup: "+err.Error())
 		return
 	}
