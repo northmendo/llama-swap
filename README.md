@@ -74,6 +74,12 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
 
 llama-swap includes a real time web interface with a playground for testing out all sorts of local models:
 
+The interface also configures the server itself: the Engines page
+manages engine updates, Discovery scans and drafts model stanzas, and
+the Config page edits everything else the fork added — upstream peers,
+cascading selectors (with live failover health) and the agent API —
+with every change validated and backed up before it is written.
+
 <img width="1094" height="667" alt="image" src="https://github.com/user-attachments/assets/a79b3cea-5ee1-45f1-8db9-5f5331690e64" />
 
 View detailed token metrics:

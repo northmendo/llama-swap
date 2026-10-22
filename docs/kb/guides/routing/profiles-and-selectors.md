@@ -152,7 +152,10 @@ settings:
   and the next target. The current per-target health is visible in the
   `llamaswap` metadata of the selector's `/v1/models` entry
   (`failover: [{target, healthy, retryAt, lastError}]`), so the web UI can
-  show it.
+  show it — and it does: the Config page's Cascades panel renders it as
+  green/red badges on the target chips, and the same selectors can be
+  created, reordered and edited there (see
+  `guides/api-integration/agent-api`, "Configuration verbs").
 
 Rules worth knowing:
 

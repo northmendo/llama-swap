@@ -2,6 +2,31 @@
 
 ## Unreleased (fork)
 
+- Full configuration UI (F7): everything the fork added that used to be
+  YAML-only is now editable in the browser, and over the API. New
+  `/agent/v1` config verbs — `GET /agent/v1/config` (the live config as
+  safe JSON: key fields surface only their `${env.VAR}` macro or a
+  set/unset boolean, never a resolved value), typed write verbs
+  `peers.add/update/remove`, `selectors.add/update/remove` and
+  `agent_api.update`, plus `GET /agent/v1/config/backups` and
+  approval-gated `POST /agent/v1/config/restore`. Every write is the
+  same two-step contract as `apply`: the change is staged on the parsed
+  YAML tree, the merged document must load through the binary's own
+  strict validation (a `400` carries the exact validator message and
+  leaves the file untouched), then a byte-identical timestamped backup
+  is taken and the file replaced atomically. Key fields accept an
+  `${env.VAR}` macro reference ONLY — a literal secret is rejected at
+  the API and again in the browser, so a key can never travel through
+  the UI. Removing a peer still referenced by a selector is rejected by
+  validation; the same-second backup collision is fixed with a `-2`,
+  `-3`... disambiguator. The web UI gains a Config section (sidebar,
+  next to Engines/Discovery) with Peers, Cascades (ordered target chips
+  with the live failover health from `/v1/models`, up/down reordering,
+  strategy/cooldown/spillover editors) and Agent API (enabled toggle,
+  key-macro rotate, backup list with restore) panels; every edit is a
+  dry-run Validate then an Apply with a confirm dialog for anything
+  destructive. Existing configs need no change — the endpoints are
+  additive. See docs/kb/guides/api-integration/agent-api.md.
 - Failover selectors: a new `strategy: failover` turns a selector into a
   cascading model chain — targets are tried strictly in the listed
   order and the same request is retried against the next target when

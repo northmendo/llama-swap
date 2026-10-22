@@ -4,7 +4,7 @@ summary: Enable agent_api, hand an automation a bearer key, and it can scan fold
 category: guides
 tags: [agent-api, discovery, engines, configuration, automation, api]
 config_keys: [agent_api, agent_api.enabled, agent_api.key]
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 # Driving model onboarding with the agent API
@@ -378,6 +378,77 @@ reload_required false.
 `apply` needs a single config file: when llama-swap runs with only
 `-config-dir`, the route answers `409` instead of guessing which file to
 merge into.
+
+## Configuration verbs
+
+Everything the fork added that used to be YAML-only — `peers:`,
+`selectors:` and the `agent_api:` section itself — is also editable over
+the API (and in the web UI's Config page, which drives these routes):
+
+### GET /agent/v1/config
+
+The live configuration as structured JSON. Key fields are SAFE: an API
+key is shown only as its `${env.VAR}` macro (when the file references
+one) or as a `set`/`unset` boolean — the resolved value never leaves
+the process.
+
+```json
+{
+  "peers": [
+    { "name": "openrouter", "proxy": "https://openrouter.ai/api",
+      "apiKey": {"macro": "${env.OPENROUTER_KEY}", "set": true},
+      "tailcatKey": {"set": false}, "models": ["glm-4.9"] }
+  ],
+  "selectors": [
+    { "name": "lila-brain", "strategy": "failover",
+      "targets": ["lunaroute/glm-5.3-background", "deepseek/deepseek-v4-flash"],
+      "spillover": 0, "cooldown": "90s" }
+  ],
+  "agentApi": { "enabled": true, "key": {"set": true} }
+}
+```
+
+### The write verbs
+
+Typed payloads, all POST, all the same two-step contract as `apply`:
+send `approved` false first to validate the merged document, then
+`approved: true` to write. Every approved write takes a byte-identical
+timestamped backup next to the config file (`config.yaml.bak-<UTC
+timestamp>`) before replacing it atomically, and answers with the new
+state plus the backup path. Validation failure is a `400` carrying the
+validator's exact message — nothing is written.
+
+- `POST /agent/v1/config/peers.add` — `{"name", "proxy", "apiKey"?,
+  "tailcatKey"?, "models", "approved"}`. `apiKey`/`tailcatKey` accept an
+  `${env.VAR}` reference only; a literal secret is rejected with a `400`.
+- `POST /agent/v1/config/peers.update` — same shape; omitted fields keep
+  their configured values, `""` clears a key.
+- `POST /agent/v1/config/peers.remove` — `{"name", "approved"}`. A peer
+  still referenced by a selector is REJECTED by validation with
+  `selectors.<id>.targets[n] references unknown model ...`.
+- `POST /agent/v1/config/selectors.add` — `{"name", "strategy",
+  "targets", "spillover"?, "cooldown"?, "description"?, "unlisted"?}`,
+  strategy one of `warm`, `pin`, `spillover`, `failover`.
+- `POST /agent/v1/config/selectors.update` — same shape; `targets` is
+  the full ordered list, so reordering is just re-sending it.
+- `POST /agent/v1/config/selectors.remove` — `{"name", "approved"}`.
+- `POST /agent/v1/config/agent_api.update` — `{"enabled"?, "key"?}`,
+  at least one of them. The key accepts an `${env.VAR}` reference only.
+  Disabling warns in the response: after the next reload the
+  `/agent/v1` routes (including this one) are unmounted.
+
+### GET /agent/v1/config/backups
+
+Lists the timestamped backups (from these verbs, from `apply`, and from
+restore's own safety backup), newest first:
+`{"backups": [{"name", "path", "sizeBytes", "modifiedAt"}]}`.
+
+### POST /agent/v1/config/restore
+
+`{"backup": "<basename from the list>", "approved"}` — puts one backup
+back after it passes the same load validation. Approval-gated like
+`apply`; the current config is backed up first, so a restore is itself
+reversible. Basenames only — a path is rejected.
 
 ## A full onboarding loop
 
