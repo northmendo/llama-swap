@@ -133,57 +133,75 @@ func tryLACT(ctx context.Context, every time.Duration, logger *logmon.Monitor) (
 	return ch, nil
 }
 
+// tryNvidiaSmi polls nvidia-smi with a one-shot query per collection tick.
+// A long-lived `nvidia-smi --loop` child holds an NVML session open for its
+// whole life, which keeps the GPU awake at a high power state (fans spinning
+// at idle); a one-shot process releases the session as soon as it exits.
 func tryNvidiaSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
 	if _, err := exec.LookPath("nvidia-smi"); err != nil {
 		return nil, ErrNoGpuTool
-	}
-
-	sec := int(every.Seconds())
-	if sec < 1 {
-		sec = 1
-	}
-
-	cmd := exec.CommandContext(ctx, "nvidia-smi",
-		"--query-gpu=index,name,uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw",
-		"--format=csv,noheader,nounits",
-		"--loop", fmt.Sprintf("%d", sec),
-	)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("nvidia-smi stdout pipe failed: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("nvidia-smi start failed: %w", err)
 	}
 
 	ch := make(chan []GpuStat, 1)
 
 	go func() {
 		defer close(ch)
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
 
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" {
-				continue
-			}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				stats, err := queryNvidiaSmi(ctx)
+				if err != nil {
+					logger.Debugf("nvidia-smi query failed: %s", err.Error())
+					continue
+				}
 
-			stat := ParseNvidiaSmiLine(line)
-			if stat != nil {
-				select {
-				case ch <- []GpuStat{*stat}:
-				default:
+				if len(stats) > 0 {
+					select {
+					case ch <- stats:
+					default:
+					}
 				}
 			}
-		}
-		if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-			logger.Errorf("nvidia-smi exited: %s", err.Error())
 		}
 	}()
 
 	return ch, nil
+}
+
+// queryNvidiaSmi runs a single nvidia-smi query and parses one GpuStat per
+// reported GPU. It returns an error if the command fails or times out; the
+// query timeout bounds a hung nvidia-smi so ticks never overlap.
+func queryNvidiaSmi(ctx context.Context) ([]GpuStat, error) {
+	const queryTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "nvidia-smi",
+		"--query-gpu=index,name,uuid,temperature.gpu,utilization.gpu,memory.used,memory.total,fan.speed,power.draw",
+		"--format=csv,noheader,nounits",
+	).Output()
+	if err != nil {
+		return nil, fmt.Errorf("nvidia-smi failed: %w", err)
+	}
+
+	stats := make([]GpuStat, 0)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if stat := ParseNvidiaSmiLine(line); stat != nil {
+			stats = append(stats, *stat)
+		}
+	}
+
+	return stats, nil
 }
 
 func tryRocmSmi(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuStat, error) {
