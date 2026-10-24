@@ -101,6 +101,64 @@ export function modelsFromText(text: string): string[] {
     .filter((part) => part.length > 0);
 }
 
+// ---------------------------------------------------------------------------
+// Live provider pick list (peer models, selector targets)
+// ---------------------------------------------------------------------------
+
+/** One pickable model ID, with an optional hint line (owner, context). */
+export interface ModelPickOption {
+  id: string;
+  hint?: string;
+}
+
+/** Case-insensitive substring filter over a pick list — the searchable
+ * dropdown's whole matching rule, kept pure so it is testable. */
+export function filterPickOptions(options: ModelPickOption[], query: string): ModelPickOption[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return options;
+  return options.filter((opt) => opt.id.toLowerCase().includes(needle));
+}
+
+/** Append one model ID to a comma-separated form list, skipping a
+ * duplicate. Returns the new text so Svelte's $state picks it up. */
+export function appendModelToText(text: string, id: string): string {
+  if (modelsFromText(text).includes(id)) return text;
+  const trimmed = text.trim();
+  if (!trimmed) return id;
+  if (trimmed.endsWith(",")) return trimmed + " " + id;
+  return trimmed + ", " + id;
+}
+
+/** Hint line for one catalog entry: owner and/or context length. */
+export function pickHint(ownedBy?: string, contextLength?: number): string | undefined {
+  const parts: string[] = [];
+  if (ownedBy) parts.push(ownedBy);
+  if (contextLength && contextLength > 0) {
+    parts.push(`ctx ${contextLength.toLocaleString("en-US")}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/** Pick options for selector targets: local models as-is, and a peer's
+ * live catalog entries as peerName/modelId fully qualified names (the
+ * routing form config.ResolvePeerModel accepts). */
+export function targetPickOptions(
+  localModels: string[],
+  peerCatalogs: { peer: string; models: string[] }[],
+): ModelPickOption[] {
+  const out: ModelPickOption[] = localModels.map((id) => ({ id }));
+  const seen = new Set(localModels);
+  for (const { peer, models } of peerCatalogs) {
+    for (const model of models) {
+      const fqn = `${peer}/${model}`;
+      if (seen.has(fqn)) continue;
+      seen.add(fqn);
+      out.push({ id: fqn, hint: `peers.${peer}` });
+    }
+  }
+  return out;
+}
+
 export interface OutcomeBox {
   ok: boolean;
   text: string;

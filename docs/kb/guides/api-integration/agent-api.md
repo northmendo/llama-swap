@@ -437,6 +437,44 @@ validator's exact message — nothing is written.
   Disabling warns in the response: after the next reload the
   `/agent/v1` routes (including this one) are unmounted.
 
+### POST /agent/v1/config/peers.catalog
+
+The live provider pick list: one peer's real `/v1/models` catalog,
+fetched over the peer's own proxy, so model IDs are picked from what
+the provider actually serves instead of hand-typed. Read-only — nothing
+is validated, written or restarted. The web UI's Config page drives it
+for the peers form and the cascade target picker.
+
+Two addressing modes, exactly one per request:
+
+- `{"name": "openrouter"}` — a configured peer. Proxy, API key and
+  timeouts all come from the server-side config, so a key the file
+  holds even as a literal never travels anywhere. Unknown names are a
+  `404`.
+- `{"proxy": "https://…", "apiKey": "${env.MY_KEY}"?}` — a peer still
+  being drafted in the add form. The key accepts an `${env.VAR}`
+  reference only (the same rule as the write verbs; a literal is a
+  `400`) and is resolved from the environment server-side.
+
+The answer is the provider's listing, sorted and deduplicated:
+
+```json
+{
+  "source": "peers.openrouter",
+  "models": [
+    { "id": "deepseek/deepseek-chat-v4", "ownedBy": "deepseek",
+      "contextLength": 131072 }
+  ]
+}
+```
+
+Degradation is deliberate and per provider: an unreachable proxy, a
+rejected key or a slow provider is a clean `502` carrying the reason
+(`provider catalog unavailable: …`) — one failed query never touches
+another peer or blocks editing anything else. `tailcat://` proxies
+answer a `400` suggesting manual entry, since Tailcat is not plain
+HTTP. The whole query is capped at 15 seconds.
+
 ### GET /agent/v1/config/backups
 
 Lists the timestamped backups (from these verbs, from `apply`, and from

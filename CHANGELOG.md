@@ -2,6 +2,23 @@
 
 ## Unreleased (fork)
 
+- Live per-provider model pick list (F8): a new read-only agent API
+  route, `POST /agent/v1/config/peers.catalog`, queries a provider's
+  real `/v1/models` over its own proxy so model IDs are picked from
+  what it actually serves instead of hand-typed. A configured peer is
+  addressed by name and its proxy, API key and timeouts come from the
+  server-side config (a key the file holds even as a literal never
+  travels anywhere); a peer still being drafted in the add form is
+  addressed by proxy with an `${env.VAR}` key macro, resolved
+  server-side — literals are rejected exactly like the write verbs.
+  The fetch reuses internal/capcompat, the existing `/v1/models`
+  client; no second fetcher. In the web UI's Config page the peers
+  form and the cascade target editor both grow a searchable pick list
+  (local models plus each peer's live catalog as `peer/model` targets).
+  Degradation is per provider: an unreachable proxy, a rejected key or
+  a slow provider answers one clean `502` with the reason and never
+  blocks editing anything else; the whole query is capped at 15 s.
+  See docs/kb/guides/api-integration/agent-api.md.
 - Full configuration UI (F7): everything the fork added that used to be
   YAML-only is now editable in the browser, and over the API. New
   `/agent/v1` config verbs — `GET /agent/v1/config` (the live config as

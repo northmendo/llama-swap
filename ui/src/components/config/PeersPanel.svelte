@@ -15,18 +15,24 @@
   import { Plus, Pencil, Trash2 } from "@lucide/svelte";
   import EmptyState from "../EmptyState.svelte";
   import Tag from "../Tag.svelte";
+  import ModelPicker from "./ModelPicker.svelte";
   import {
     addPeer,
+    fetchPeerCatalog,
     removePeer,
     updatePeer,
+    type PeerCatalogModel,
     type PeerState,
   } from "../../lib/agentApi";
   import {
+    appendModelToText,
     describeWriteResult,
     envMacroError,
     modelsFromText,
     modelsToText,
+    pickHint,
     secretLabel,
+    type ModelPickOption,
     type OutcomeBox,
   } from "../../lib/configUi";
 
@@ -45,6 +51,7 @@
   // ---- editor dialog ------------------------------------------------------
 
   let editing = $state<"add" | "edit" | null>(null);
+  let editingPeer = $state<PeerState | null>(null);
   let formName = $state("");
   let formProxy = $state("");
   let formApiKey = $state("");
@@ -53,6 +60,12 @@
   let busy = $state(false);
   let outcome = $state<OutcomeBox | null>(null);
   let outcomeError = $state<string | null>(null);
+
+  // ---- live provider catalog (the pick list for the models field) ----
+
+  let catalogLoading = $state(false);
+  let catalogOptions = $state<ModelPickOption[] | null>(null);
+  let catalogError = $state<string>("");
 
   // ---- remove dialog ------------------------------------------------------
 
@@ -65,6 +78,7 @@
 
   function openAdd(): void {
     editing = "add";
+    editingPeer = null;
     formName = "";
     formProxy = "";
     formApiKey = "";
@@ -72,10 +86,12 @@
     formKeyTouched = false;
     outcome = null;
     outcomeError = null;
+    resetCatalog();
   }
 
   function openEdit(peer: PeerState): void {
     editing = "edit";
+    editingPeer = peer;
     formName = peer.name;
     formProxy = peer.proxy;
     formApiKey = peer.apiKey.macro ?? "";
@@ -83,6 +99,56 @@
     formKeyTouched = peer.apiKey.set;
     outcome = null;
     outcomeError = null;
+    resetCatalog();
+  }
+
+  function resetCatalog(): void {
+    catalogLoading = false;
+    catalogOptions = null;
+    catalogError = "";
+  }
+
+  /**
+   * Which provider to query for the pick list. When the form still
+   * matches the configured peer (same proxy, same macro — or a key the
+   * UI never sees because the file holds a literal), the peer is
+   * addressed by name so the server uses its own stored key; a drafted
+   * or re-pointed peer sends the form's proxy plus the ${env.VAR}
+   * macro it knows.
+   */
+  function catalogInput(): { name?: string; proxy?: string; apiKey?: string } {
+    const proxy = formProxy.trim();
+    const key = formApiKey.trim();
+    if (
+      editing === "edit" &&
+      editingPeer &&
+      proxy === editingPeer.proxy &&
+      key === (editingPeer.apiKey.macro ?? "")
+    ) {
+      return { name: formName.trim() };
+    }
+    return { proxy, ...(key ? { apiKey: key } : {}) };
+  }
+
+  /** Fetch the provider's live /v1/models for the pick list. A failure
+   * is shown inline in the picker and never blocks the form. */
+  async function loadCatalog(): Promise<void> {
+    catalogLoading = true;
+    catalogError = "";
+    try {
+      const models: PeerCatalogModel[] = await fetchPeerCatalog(catalogInput());
+      catalogOptions = models.map((m) => ({ id: m.id, hint: pickHint(m.ownedBy, m.contextLength) }));
+    } catch (e) {
+      catalogOptions = null;
+      if (!onauth(e)) catalogError = message(e);
+    } finally {
+      catalogLoading = false;
+    }
+  }
+
+  /** One picked catalog entry lands in the models list, duplicates skipped. */
+  function addModelFromCatalog(id: string): void {
+    formModels = appendModelToText(formModels, id);
   }
 
   /** The macro rule, checked in the browser before anything is sent. */
@@ -268,6 +334,36 @@
           class="mt-1"
         />
         <p class="text-muted-foreground mt-1 text-xs">Comma or newline separated model IDs.</p>
+
+        <div class="mt-2 rounded-md border p-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium">Live provider catalog</span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={catalogLoading || !formProxy.trim()}
+              onclick={() => void loadCatalog()}
+            >
+              {catalogLoading ? "Loading…" : "Load models from provider"}
+            </Button>
+          </div>
+          <p class="text-muted-foreground mt-1 text-xs">
+            Queries the provider's real /v1/models over its proxy, so picked IDs are the ones it
+            actually serves. The key never leaves the server.
+          </p>
+          {#if catalogOptions !== null || catalogError}
+            <div class="mt-2">
+              <ModelPicker
+                options={catalogOptions ?? []}
+                loading={false}
+                error={catalogError}
+                emptyText="The provider reported no models; enter IDs by hand."
+                placeholder="Filter provider models…"
+                onpick={addModelFromCatalog}
+              />
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
 

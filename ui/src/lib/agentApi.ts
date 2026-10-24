@@ -399,6 +399,37 @@ export async function removePeer(name: string, approved: boolean): Promise<Confi
   return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/peers.remove", { name, approved });
 }
 
+/** One entry of a live provider catalog (POST /agent/v1/config/peers.catalog). */
+export interface PeerCatalogModel {
+  id: string;
+  ownedBy?: string;
+  contextLength?: number;
+}
+
+/** Which provider to query: a configured peer by name, or a draft peer
+ * by proxy (with an optional ${env.VAR} key macro — never a literal). */
+export interface PeerCatalogInput {
+  name?: string;
+  proxy?: string;
+  apiKey?: string;
+}
+
+/**
+ * POST /agent/v1/config/peers.catalog — the provider's live /v1/models
+ * listing for the pick list. With "name" the server uses the peer's
+ * configured proxy and key server-side, so a key never travels to the
+ * UI in either direction. Rejects with a 502 AgentApiError when the
+ * provider is unreachable or rejects the key.
+ */
+export async function fetchPeerCatalog(input: PeerCatalogInput): Promise<PeerCatalogModel[]> {
+  const data = await agentRequest<{ source: string; models: PeerCatalogModel[] }>(
+    "POST",
+    "/agent/v1/config/peers.catalog",
+    input,
+  );
+  return data.models ?? [];
+}
+
 /** POST /agent/v1/config/selectors.add */
 export async function addSelector(input: SelectorWriteInput): Promise<ConfigWriteResponse> {
   return agentRequest<ConfigWriteResponse>("POST", "/agent/v1/config/selectors.add", input);

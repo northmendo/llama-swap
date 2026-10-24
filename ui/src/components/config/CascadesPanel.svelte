@@ -16,10 +16,13 @@
   import { Plus, Pencil, Trash2, ArrowUp, ArrowDown, X } from "@lucide/svelte";
   import EmptyState from "../EmptyState.svelte";
   import Tag from "../Tag.svelte";
+  import ModelPicker from "./ModelPicker.svelte";
   import {
     addSelector,
+    fetchPeerCatalog,
     removeSelector,
     updateSelector,
+    type PeerState,
     type SelectorState,
   } from "../../lib/agentApi";
   import {
@@ -27,6 +30,8 @@
     healthFor,
     retryLabel,
     SELECTOR_STRATEGIES,
+    targetPickOptions,
+    type ModelPickOption,
     type OutcomeBox,
     type TargetHealth,
   } from "../../lib/configUi";
@@ -34,12 +39,16 @@
   let {
     selectors = [],
     health = new Map<string, TargetHealth[]>(),
+    peers = [],
+    localModels = [],
     onchanged,
     onauth,
     onerror,
   }: {
     selectors: SelectorState[];
     health?: Map<string, TargetHealth[]>;
+    peers?: PeerState[];
+    localModels?: string[];
     onchanged: () => void;
     onauth: (e: unknown) => boolean;
     onerror: (text: string) => void;
@@ -79,6 +88,7 @@
     formDescription = "";
     outcome = null;
     outcomeError = null;
+    resetTargetPicker();
   }
 
   function openEdit(selector: SelectorState): void {
@@ -92,6 +102,7 @@
     formDescription = selector.description ?? "";
     outcome = null;
     outcomeError = null;
+    resetTargetPicker();
   }
 
   function addTarget(): void {
@@ -100,6 +111,58 @@
       formTargets = [...formTargets, value];
     }
     formTargetInput = "";
+  }
+
+  // ---- live target pick list (local models + per-peer catalogs) ----
+
+  let targetsLoading = $state(false);
+  let targetOptions = $state<ModelPickOption[] | null>(null);
+  let targetErrors = $state<string[]>([]);
+
+  function resetTargetPicker(): void {
+    targetsLoading = false;
+    targetOptions = null;
+    targetErrors = [];
+  }
+
+  /**
+   * Build the target pick list: this server's own models plus every
+   * configured peer's live /v1/models catalog (as peerName/modelId
+   * fully qualified names). Each peer is queried independently, so one
+   * dead or key-rejecting provider only costs its own inline error —
+   * the rest of the list still loads.
+   */
+  async function loadTargetOptions(): Promise<void> {
+    targetsLoading = true;
+    targetErrors = [];
+    try {
+      const results = await Promise.all(
+        peers.map(async (peer) => {
+          try {
+            const models = await fetchPeerCatalog({ name: peer.name });
+            return { peer: peer.name, models: models.map((m) => m.id) };
+          } catch (e) {
+            if (onauth(e)) throw e;
+            targetErrors = [...targetErrors, `peers.${peer.name}: ${message(e)}`];
+            return null;
+          }
+        }),
+      );
+      const catalogs = results.filter((r): r is { peer: string; models: string[] } => r !== null);
+      targetOptions = targetPickOptions(localModels, catalogs);
+    } catch (e) {
+      // A 401 aborts the whole load: the token prompt is already open.
+      targetOptions = null;
+    } finally {
+      targetsLoading = false;
+    }
+  }
+
+  /** A picked target lands in the ordered list, duplicates skipped. */
+  function addTargetFromPicker(id: string): void {
+    if (!formTargets.includes(id)) {
+      formTargets = [...formTargets, id];
+    }
   }
 
   function removeTarget(index: number): void {
@@ -320,6 +383,42 @@
             {/each}
           </ol>
         {/if}
+
+        <div class="mt-2 rounded-md border p-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium">Live target pick list</span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={targetsLoading}
+              onclick={() => void loadTargetOptions()}
+            >
+              {targetsLoading ? "Loading…" : "Load models"}
+            </Button>
+          </div>
+          <p class="text-muted-foreground mt-1 text-xs">
+            This server's models plus each peer's live /v1/models, as peerName/modelId targets.
+            Each provider is queried on its own; a provider that fails only costs its entry.
+          </p>
+          {#if targetErrors.length > 0}
+            <ul class="mt-2 space-y-0.5">
+              {#each targetErrors as err (err)}
+                <li class="text-destructive text-xs">{err}</li>
+              {/each}
+            </ul>
+          {/if}
+          {#if targetOptions !== null}
+            <div class="mt-2">
+              <ModelPicker
+                options={targetOptions}
+                error=""
+                emptyText="No models to pick; add targets by hand."
+                placeholder="Filter targets…"
+                onpick={addTargetFromPicker}
+              />
+            </div>
+          {/if}
+        </div>
       </div>
 
       {#if formStrategy === "failover"}

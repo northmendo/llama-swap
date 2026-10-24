@@ -39,6 +39,10 @@
   let config = $state<ConfigState | null>(null);
   let backups = $state<ConfigBackup[]>([]);
   let health = $state<Map<string, TargetHealth[]>>(new Map());
+  /** Model IDs this server itself serves (local models and configured
+   * peer models; selectors excluded) — the local half of the target
+   * pick list, from the same /v1/models payload as the health map. */
+  let localModels = $state<string[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -70,6 +74,14 @@
     return failoverHealthFromModels(records);
   }
 
+  /** The pickable local model IDs from the same payload: every record
+   * that is not a selector (selector chaining is invalid). */
+  function localModelsFromPayload(payload: unknown): string[] {
+    const records =
+      (payload as { data?: Array<{ id: string; meta?: { llamaswap?: SelectorMeta } }> })?.data ?? [];
+    return records.filter((r) => r.meta?.llamaswap?.type !== "selector").map((r) => r.id);
+  }
+
   /** Load the config state, the backup list and the cascade health. */
   async function load(): Promise<void> {
     if (!currentToken()) {
@@ -87,9 +99,12 @@
       config = configState;
       backups = backupList;
       if (modelsResp.ok) {
-        health = healthFromModelsPayload(await modelsResp.json());
+        const payload = await modelsResp.json();
+        health = healthFromModelsPayload(payload);
+        localModels = localModelsFromPayload(payload);
       } else {
         health = new Map();
+        localModels = [];
       }
     } catch (e) {
       if (!authProblem(e)) error = message(e);
@@ -157,6 +172,8 @@
         <CascadesPanel
           selectors={config.selectors}
           {health}
+          peers={config.peers}
+          localModels={localModels}
           onchanged={changed}
           onauth={panelAuthProblem}
           onerror={panelError}

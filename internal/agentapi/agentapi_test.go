@@ -225,6 +225,7 @@ var agentRoutePaths = []struct {
 	{"POST", "/agent/v1/config/peers.add"},
 	{"POST", "/agent/v1/config/peers.update"},
 	{"POST", "/agent/v1/config/peers.remove"},
+	{"POST", "/agent/v1/config/peers.catalog"},
 	{"POST", "/agent/v1/config/selectors.add"},
 	{"POST", "/agent/v1/config/selectors.update"},
 	{"POST", "/agent/v1/config/selectors.remove"},

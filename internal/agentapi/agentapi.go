@@ -31,6 +31,9 @@
 //	POST /agent/v1/config/peers.add     add a peer (approved-gated dry run
 //	POST /agent/v1/config/peers.update   and write, full validation, backup,
 //	POST /agent/v1/config/peers.remove   atomic replace — see configverbs.go)
+//	POST /agent/v1/config/peers.catalog   live /v1/models pick list for one
+//	                                      peer (by name or draft proxy+key
+//	                                      macro) — see peercatalog.go
 //	POST /agent/v1/config/selectors.add    same contract for cascades
 //	POST /agent/v1/config/selectors.update
 //	POST /agent/v1/config/selectors.remove
@@ -132,6 +135,7 @@ func Register(mux *http.ServeMux, opts Options) {
 	inner.HandleFunc("POST /agent/v1/config/peers.add", a.handlePeerAdd)
 	inner.HandleFunc("POST /agent/v1/config/peers.update", a.handlePeerUpdate)
 	inner.HandleFunc("POST /agent/v1/config/peers.remove", a.handlePeerRemove)
+	inner.HandleFunc("POST /agent/v1/config/peers.catalog", a.handlePeerCatalog)
 	inner.HandleFunc("POST /agent/v1/config/selectors.add", a.handleSelectorAdd)
 	inner.HandleFunc("POST /agent/v1/config/selectors.update", a.handleSelectorUpdate)
 	inner.HandleFunc("POST /agent/v1/config/selectors.remove", a.handleSelectorRemove)

@@ -186,6 +186,50 @@ describe("config verb client", () => {
     expect(res.restoredFrom).toContain("config.yaml.bak-20261022T071053Z");
   });
 
+  it("fetchPeerCatalog addresses a configured peer by name only", async () => {
+    await setToken("s3cret");
+    const { fetchPeerCatalog } = await import("./agentApi");
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        source: "peers.upstream",
+        models: [{ id: "remote-model", ownedBy: "vllm", contextLength: 8192 }],
+      }),
+    );
+
+    const models = await fetchPeerCatalog({ name: "upstream" });
+
+    expect(models).toEqual([{ id: "remote-model", ownedBy: "vllm", contextLength: 8192 }]);
+    expect(lastCall().url).toBe("/agent/v1/config/peers.catalog");
+    expect(lastBody()).toEqual({ name: "upstream" });
+  });
+
+  it("fetchPeerCatalog sends a draft proxy with its key macro", async () => {
+    await setToken("s3cret");
+    const { fetchPeerCatalog } = await import("./agentApi");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ source: "proxy", models: [] }));
+
+    await fetchPeerCatalog({ proxy: "https://openrouter.ai/api", apiKey: "${env.MY_KEY}" });
+
+    expect(lastBody()).toEqual({ proxy: "https://openrouter.ai/api", apiKey: "${env.MY_KEY}" });
+  });
+
+  it("fetchPeerCatalog surfaces a dead provider as a 502 AgentApiError", async () => {
+    await setToken("s3cret");
+    const { fetchPeerCatalog } = await import("./agentApi");
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { error: { message: "provider catalog unavailable: requesting /v1/models: dial tcp 127.0.0.1:1: connect: connection refused" } },
+        502,
+      ),
+    );
+
+    await expect(fetchPeerCatalog({ name: "upstream" })).rejects.toMatchObject({
+      name: "AgentApiError",
+      status: 502,
+      message: expect.stringContaining("provider catalog unavailable"),
+    });
+  });
+
   it("surfaces the validator's exact message on a 400", async () => {
     await setToken("s3cret");
     const { addPeer, AgentApiError } = await import("./agentApi");
