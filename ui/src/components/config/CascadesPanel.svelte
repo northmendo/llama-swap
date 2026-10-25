@@ -3,9 +3,18 @@
    * Cascades panel of the Config view: the selectors: section — one
    * card per selector with its strategy and ordered target chips, each
    * chip carrying the live failover health from /v1/models
-   * (meta.llamaswap.failover). The editor reorders targets with
-   * up/down buttons, picks a strategy and (for failover) a cooldown;
-   * every write is a dry-run "Validate" then "Apply", removals ask for
+   * (meta.llamaswap.failover).
+   *
+   * Every finite-domain field is a picker:
+   *   - strategy comes from GET /agent/v1/config/schema, which serves the
+   *     validator's own config.SelectorStrategies — never a UI-side copy;
+   *   - a target is added by picking its type (local model | provider
+   *     model) and then a model from that source's pick list, fed by this
+   *     server's /v1/models and the cached provider catalogs. Targets keep
+   *     their order (up/down), duplicates are skipped, and the wire format
+   *     is unchanged ("existing", "peerName/modelId").
+   *
+   * Every write is a dry-run "Validate" then "Apply", removals ask for
    * confirmation first.
    */
   import { Button } from "$lib/components/ui/button/index.js";
@@ -13,7 +22,7 @@
   import * as Label from "$lib/components/ui/label/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import { Plus, Pencil, Trash2, ArrowUp, ArrowDown, X } from "@lucide/svelte";
+  import { Plus, Pencil, Trash2, ArrowUp, ArrowDown, X, RefreshCw } from "@lucide/svelte";
   import EmptyState from "../EmptyState.svelte";
   import Tag from "../Tag.svelte";
   import ModelPicker from "./ModelPicker.svelte";
@@ -22,16 +31,20 @@
     fetchPeerCatalog,
     removeSelector,
     updateSelector,
+    type PeerCatalogEntry,
     type PeerState,
     type SelectorState,
   } from "../../lib/agentApi";
   import {
+    catalogGroups,
+    DEFAULT_SELECTOR_STRATEGY,
     describeWriteResult,
+    groupsForSource,
     healthFor,
     retryLabel,
-    SELECTOR_STRATEGIES,
-    targetPickOptions,
-    type ModelPickOption,
+    strategyOptions,
+    targetGroups,
+    targetSource,
     type OutcomeBox,
     type TargetHealth,
   } from "../../lib/configUi";
@@ -41,26 +54,38 @@
     health = new Map<string, TargetHealth[]>(),
     peers = [],
     localModels = [],
+    catalogs = [],
+    strategies = [],
+    defaultStrategy = DEFAULT_SELECTOR_STRATEGY,
     onchanged,
     onauth,
     onerror,
+    onrefresh,
   }: {
     selectors: SelectorState[];
     health?: Map<string, TargetHealth[]>;
     peers?: PeerState[];
     localModels?: string[];
+    /** The server's cached provider catalogs (hydration, no probing). */
+    catalogs?: PeerCatalogEntry[];
+    /** The strategy list from GET /agent/v1/config/schema. */
+    strategies?: string[];
+    defaultStrategy?: string;
     onchanged: () => void;
     onauth: (e: unknown) => boolean;
     onerror: (text: string) => void;
+    /** Re-read the cached catalogs after a successful check. */
+    onrefresh?: () => void;
   } = $props();
 
   // ---- editor dialog ------------------------------------------------------
 
   let editing = $state<"add" | "edit" | null>(null);
   let formName = $state("");
-  let formStrategy = $state("failover");
+  let formStrategy = $state("");
   let formTargets = $state<string[]>([]);
   let formTargetInput = $state("");
+  let formTargetSource = $state<"local" | "provider">("local");
   let formCooldown = $state("");
   let formSpillover = $state(1);
   let formDescription = $state("");
@@ -77,12 +102,19 @@
     return e instanceof Error ? e.message : String(e);
   }
 
+  let strategyList = $derived(strategyOptions(strategies));
+
+  function selectTargetSource(value: string): void {
+    if (value === "local" || value === "provider") formTargetSource = value;
+  }
+
   function openAdd(): void {
     editing = "add";
     formName = "";
-    formStrategy = "failover";
+    formStrategy = strategyList.includes(defaultStrategy) ? defaultStrategy : strategyList[0];
     formTargets = [];
     formTargetInput = "";
+    formTargetSource = "local";
     formCooldown = "";
     formSpillover = 1;
     formDescription = "";
@@ -97,6 +129,7 @@
     formStrategy = selector.strategy;
     formTargets = [...selector.targets];
     formTargetInput = "";
+    formTargetSource = "local";
     formCooldown = selector.cooldown ?? "";
     formSpillover = selector.spillover > 0 ? selector.spillover : 1;
     formDescription = selector.description ?? "";
@@ -113,24 +146,28 @@
     formTargetInput = "";
   }
 
-  // ---- live target pick list (local models + per-peer catalogs) ----
+  // ---- target pick list (local models + per-peer catalogs) ----------------
 
   let targetsLoading = $state(false);
-  let targetOptions = $state<ModelPickOption[] | null>(null);
   let targetErrors = $state<string[]>([]);
+  /** Catalogs fetched on demand by "Check providers now", overriding the
+   * cached ones the parent handed in. */
+  let liveCatalogs = $state<{ name: string; models: { id: string }[] }[] | null>(null);
 
   function resetTargetPicker(): void {
     targetsLoading = false;
-    targetOptions = null;
     targetErrors = [];
+    liveCatalogs = null;
   }
 
+  let pickGroups = $derived(targetGroups(localModels, catalogGroups(liveCatalogs ?? catalogs)));
+  let sourceGroups = $derived(groupsForSource(pickGroups, formTargetSource));
+  let peerNames = $derived(peers.map((peer) => peer.name));
+
   /**
-   * Build the target pick list: this server's own models plus every
-   * configured peer's live /v1/models catalog (as peerName/modelId
-   * fully qualified names). Each peer is queried independently, so one
-   * dead or key-rejecting provider only costs its own inline error —
-   * the rest of the list still loads.
+   * Probe every configured peer for its live /v1/models. Each peer is
+   * queried independently, so one dead or key-rejecting provider only costs
+   * its own inline error — the rest of the list still loads.
    */
   async function loadTargetOptions(): Promise<void> {
     targetsLoading = true;
@@ -140,7 +177,7 @@
         peers.map(async (peer) => {
           try {
             const models = await fetchPeerCatalog({ name: peer.name });
-            return { peer: peer.name, models: models.map((m) => m.id) };
+            return { name: peer.name, models: models.map((m) => ({ id: m.id })) };
           } catch (e) {
             if (onauth(e)) throw e;
             targetErrors = [...targetErrors, `peers.${peer.name}: ${message(e)}`];
@@ -148,11 +185,13 @@
           }
         }),
       );
-      const catalogs = results.filter((r): r is { peer: string; models: string[] } => r !== null);
-      targetOptions = targetPickOptions(localModels, catalogs);
-    } catch (e) {
+      liveCatalogs = results.filter(
+        (r): r is { name: string; models: { id: string }[] } => r !== null,
+      );
+      onrefresh?.();
+    } catch {
       // A 401 aborts the whole load: the token prompt is already open.
-      targetOptions = null;
+      liveCatalogs = null;
     } finally {
       targetsLoading = false;
     }
@@ -337,38 +376,29 @@
           >
             <Select.Trigger class="mt-1 w-full">{formStrategy}</Select.Trigger>
             <Select.Content>
-              {#each SELECTOR_STRATEGIES as strategy (strategy)}
+              {#each strategyList as strategy (strategy)}
                 <Select.Item value={strategy}>{strategy}</Select.Item>
               {/each}
             </Select.Content>
           </Select.Root>
+          {#if strategies.length === 0}
+            <p class="text-muted-foreground mt-1 text-[10px]">
+              Server strategy list unavailable — showing the built-in set.
+            </p>
+          {/if}
         </div>
       </div>
 
       <div>
-        <Label.Root for="selector-target-input" class="text-sm">Targets (in order)</Label.Root>
-        <div class="mt-1 flex gap-2">
-          <Input
-            id="selector-target-input"
-            bind:value={formTargetInput}
-            placeholder="existing, peerName/modelId"
-            onkeydown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addTarget();
-              }
-            }}
-          />
-          <Button variant="outline" size="sm" onclick={addTarget}>
-            <Plus />
-            Add
-          </Button>
-        </div>
+        <Label.Root class="text-sm">Targets (in order)</Label.Root>
         {#if formTargets.length > 0}
-          <ol class="mt-2 space-y-1">
+          <ol class="mt-1 space-y-1">
             {#each formTargets as target, index (target)}
               <li class="flex items-center gap-1 rounded-md border px-2 py-1">
                 <span class="text-muted-foreground w-5 text-right text-xs">{index + 1}.</span>
+                <span class="text-muted-foreground rounded border px-1 text-[10px] uppercase">
+                  {targetSource(target, localModels, peerNames) === "local" ? "local" : "peer"}
+                </span>
                 <span class="flex-1 font-mono text-xs">{target}</span>
                 <Button variant="ghost" size="sm" disabled={index === 0} onclick={() => moveTarget(index, -1)}>
                   <ArrowUp />
@@ -385,20 +415,35 @@
         {/if}
 
         <div class="mt-2 rounded-md border p-2">
-          <div class="flex items-center gap-2">
-            <span class="text-xs font-medium">Live target pick list</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium">Add a target</span>
+            <Select.Root
+              type="single"
+              value={formTargetSource}
+              onValueChange={(v) => v && selectTargetSource(v)}
+            >
+              <Select.Trigger class="w-40 text-xs">
+                {formTargetSource === "local" ? "local model" : "provider model"}
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="local">local model</Select.Item>
+                <Select.Item value="provider">provider model</Select.Item>
+              </Select.Content>
+            </Select.Root>
             <Button
               variant="outline"
               size="sm"
-              disabled={targetsLoading}
+              disabled={targetsLoading || peers.length === 0}
               onclick={() => void loadTargetOptions()}
             >
-              {targetsLoading ? "Loading…" : "Load models"}
+              <RefreshCw class={targetsLoading ? "animate-spin" : ""} />
+              {targetsLoading ? "Checking…" : "Check providers now"}
             </Button>
           </div>
           <p class="text-muted-foreground mt-1 text-xs">
-            This server's models plus each peer's live /v1/models, as peerName/modelId targets.
-            Each provider is queried on its own; a provider that fails only costs its entry.
+            Local models come from this server's /v1/models; provider models from the cached
+            provider catalogs (peerName/modelId). Each provider is checked on its own; a provider
+            that fails only costs its entry.
           </p>
           {#if targetErrors.length > 0}
             <ul class="mt-2 space-y-0.5">
@@ -407,17 +452,37 @@
               {/each}
             </ul>
           {/if}
-          {#if targetOptions !== null}
-            <div class="mt-2">
-              <ModelPicker
-                options={targetOptions}
-                error=""
-                emptyText="No models to pick; add targets by hand."
-                placeholder="Filter targets…"
-                onpick={addTargetFromPicker}
-              />
-            </div>
-          {/if}
+          <div class="mt-2">
+            <ModelPicker
+              groups={sourceGroups}
+              loading={targetsLoading}
+              emptyText={formTargetSource === "local"
+                ? "No local models listed yet."
+                : "No cached provider catalog yet; press Check providers now, or type a target."}
+              placeholder={formTargetSource === "local"
+                ? "Filter local models…"
+                : "Filter provider models…"}
+              onpick={addTargetFromPicker}
+            />
+          </div>
+          <div class="mt-2 flex gap-2">
+            <Input
+              id="selector-target-input"
+              bind:value={formTargetInput}
+              placeholder="existing, peerName/modelId"
+              class="text-xs"
+              onkeydown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addTarget();
+                }
+              }}
+            />
+            <Button variant="outline" size="sm" onclick={addTarget}>
+              <Plus />
+              Add
+            </Button>
+          </div>
         </div>
       </div>
 

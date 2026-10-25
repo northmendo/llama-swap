@@ -1,36 +1,59 @@
 <script lang="ts">
   /**
    * Peers panel of the Config view: the peers: section as a table with
-   * add/edit/remove forms. Key fields accept an ${env.VAR} macro name
-   * ONLY — the client rejects a literal secret before anything is sent
-   * and the server rejects it again on the other end. Every write is a
-   * dry-run "Validate" (approved: false) followed by "Apply"; removals
-   * ask for confirmation first.
+   * add/edit/remove forms.
+   *
+   * Every finite-domain field is a picker:
+   *   - name is free text (it is the identifier);
+   *   - proxy is a select of the proxies already configured plus the
+   *     server's presets, with "custom…" revealing the free-text input and
+   *     the same validation as before;
+   *   - apiKey is a select of ${env.VAR} NAMES the server knows (flagged
+   *     when they no longer resolve) with "other macro…" and a "literal
+   *     (discouraged)" fallback — literals stay rejected, exactly as today;
+   *   - models is a chip list fed by the server's cached provider catalog,
+   *     with hand-typed IDs kept as "unverified" chips because models come
+   *     and go.
+   *
+   * Reads and writes never carry a key value: the browser only ever sees
+   * the macro NAME. Every write is a dry-run "Validate" (approved: false)
+   * followed by "Apply"; removals ask for confirmation first.
    */
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import * as Label from "$lib/components/ui/label/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
-  import { Textarea } from "$lib/components/ui/textarea/index.js";
-  import { Plus, Pencil, Trash2 } from "@lucide/svelte";
+  import { Plus, Pencil, Trash2, X, RefreshCw, CircleAlert, CircleCheck } from "@lucide/svelte";
   import EmptyState from "../EmptyState.svelte";
   import Tag from "../Tag.svelte";
   import ModelPicker from "./ModelPicker.svelte";
   import {
     addPeer,
-    fetchPeerCatalog,
+    probePeerCatalog,
     removePeer,
     updatePeer,
+    type EnvName,
+    type PeerCatalogEntry,
     type PeerCatalogModel,
     type PeerState,
+    type ProxyPreset,
   } from "../../lib/agentApi";
   import {
     appendModelToText,
+    catalogIds,
     describeWriteResult,
     envMacroError,
+    KEY_CUSTOM,
+    KEY_LITERAL,
+    KEY_NONE,
+    keyChoices,
+    keyChoiceFor,
     modelsFromText,
     modelsToText,
     pickHint,
+    PROXY_CUSTOM,
+    proxyChoices,
     secretLabel,
     type ModelPickOption,
     type OutcomeBox,
@@ -38,14 +61,26 @@
 
   let {
     peers = [],
+    catalogs = [],
+    envNames = [],
+    proxyPresets = [],
     onchanged,
     onauth,
     onerror,
+    onrefresh,
   }: {
     peers: PeerState[];
+    /** The server's cached provider catalogs (GET /agent/v1/config/peers.catalog). */
+    catalogs?: PeerCatalogEntry[];
+    /** ${env.VAR} NAMES the server environment offers (never values). */
+    envNames?: EnvName[];
+    /** Proxy presets from GET /agent/v1/config/schema. */
+    proxyPresets?: ProxyPreset[];
     onchanged: () => void;
     onauth: (e: unknown) => boolean;
     onerror: (text: string) => void;
+    /** Re-read the cached catalogs after a successful check. */
+    onrefresh?: () => void;
   } = $props();
 
   // ---- editor dialog ------------------------------------------------------
@@ -57,14 +92,17 @@
   let formApiKey = $state("");
   let formModels = $state("");
   let formKeyTouched = $state(false);
+  let formModelInput = $state("");
+  let proxySelection = $state("");
+  let keySelection = $state<string>(KEY_NONE);
   let busy = $state(false);
   let outcome = $state<OutcomeBox | null>(null);
   let outcomeError = $state<string | null>(null);
 
-  // ---- live provider catalog (the pick list for the models field) ----
+  // ---- provider catalog (the models pick list) ----------------------------
 
+  let liveCatalog = $state<PeerCatalogModel[] | null>(null);
   let catalogLoading = $state(false);
-  let catalogOptions = $state<ModelPickOption[] | null>(null);
   let catalogError = $state<string>("");
 
   // ---- remove dialog ------------------------------------------------------
@@ -76,6 +114,9 @@
     return e instanceof Error ? e.message : String(e);
   }
 
+  // The proxies to offer: the config's own peers plus the server's presets.
+  let proxyOptions = $derived(proxyChoices(peers, proxyPresets));
+
   function openAdd(): void {
     editing = "add";
     editingPeer = null;
@@ -83,7 +124,10 @@
     formProxy = "";
     formApiKey = "";
     formModels = "";
+    formModelInput = "";
     formKeyTouched = false;
+    proxySelection = PROXY_CUSTOM;
+    keySelection = KEY_NONE;
     outcome = null;
     outcomeError = null;
     resetCatalog();
@@ -96,59 +140,113 @@
     formProxy = peer.proxy;
     formApiKey = peer.apiKey.macro ?? "";
     formModels = modelsToText(peer.models);
+    formModelInput = "";
     formKeyTouched = peer.apiKey.set;
+    proxySelection = proxyOptions.some((choice) => choice.value === peer.proxy)
+      ? peer.proxy
+      : PROXY_CUSTOM;
+    keySelection = keyChoiceFor(
+      peer.apiKey.macro ?? "",
+      keyChoices(envNames, peer.apiKey.macro ?? ""),
+    );
     outcome = null;
     outcomeError = null;
     resetCatalog();
   }
 
   function resetCatalog(): void {
+    liveCatalog = null;
     catalogLoading = false;
-    catalogOptions = null;
     catalogError = "";
+  }
+
+  // ---- models chips -------------------------------------------------------
+
+  /** The peer's cached catalog: the server's record, or a fresh live probe. */
+  let peerCatalog = $derived.by(() => {
+    if (liveCatalog !== null) return liveCatalog;
+    return catalogs.find((entry) => entry.name === formName)?.models ?? [];
+  });
+  let verifiedIds = $derived(catalogIds(peerCatalog));
+  let modelChips = $derived(
+    modelsFromText(formModels).map((id) => ({ id, verified: verifiedIds.includes(id) })),
+  );
+  let pickGroups = $derived(
+    peerCatalog.length > 0
+      ? [
+          {
+            label: `peers.${formName.trim() || "provider"}`,
+            options: peerCatalog.map(
+              (model): ModelPickOption => ({
+                id: model.id,
+                hint: pickHint(model.ownedBy, model.contextLength),
+              }),
+            ),
+          },
+        ]
+      : [],
+  );
+
+  function addModel(id: string): void {
+    formModels = appendModelToText(formModels, id);
+  }
+
+  function addTypedModel(): void {
+    const id = formModelInput.trim();
+    if (!id) return;
+    addModel(id);
+    formModelInput = "";
+  }
+
+  function removeModel(id: string): void {
+    formModels = modelsFromText(formModels)
+      .filter((model) => model !== id)
+      .join(", ");
   }
 
   /**
-   * Which provider to query for the pick list. When the form still
-   * matches the configured peer (same proxy, same macro — or a key the
-   * UI never sees because the file holds a literal), the peer is
-   * addressed by name so the server uses its own stored key; a drafted
-   * or re-pointed peer sends the form's proxy plus the ${env.VAR}
-   * macro it knows.
+   * Query the provider live for its /v1/models and show the result in the
+   * picker. A failure is inline and never blocks the form. On success the
+   * server also refreshes its catalog cache, so the parent re-reads it.
    */
-  function catalogInput(): { name?: string; proxy?: string; apiKey?: string } {
-    const proxy = formProxy.trim();
-    const key = formApiKey.trim();
-    if (
-      editing === "edit" &&
-      editingPeer &&
-      proxy === editingPeer.proxy &&
-      key === (editingPeer.apiKey.macro ?? "")
-    ) {
-      return { name: formName.trim() };
-    }
-    return { proxy, ...(key ? { apiKey: key } : {}) };
-  }
-
-  /** Fetch the provider's live /v1/models for the pick list. A failure
-   * is shown inline in the picker and never blocks the form. */
-  async function loadCatalog(): Promise<void> {
+  async function checkModels(): Promise<void> {
     catalogLoading = true;
     catalogError = "";
     try {
-      const models: PeerCatalogModel[] = await fetchPeerCatalog(catalogInput());
-      catalogOptions = models.map((m) => ({ id: m.id, hint: pickHint(m.ownedBy, m.contextLength) }));
+      const samePeer =
+        editing === "edit" &&
+        editingPeer !== null &&
+        formProxy.trim() === editingPeer.proxy &&
+        formApiKey.trim() === (editingPeer.apiKey.macro ?? "");
+      const key = formApiKey.trim();
+      const input = samePeer
+        ? { name: formName.trim() }
+        : { proxy: formProxy.trim(), ...(key ? { apiKey: key } : {}) };
+      const probe = await probePeerCatalog(input);
+      liveCatalog = probe.models;
+      onrefresh?.();
     } catch (e) {
-      catalogOptions = null;
+      liveCatalog = null;
       if (!onauth(e)) catalogError = message(e);
     } finally {
       catalogLoading = false;
     }
   }
 
-  /** One picked catalog entry lands in the models list, duplicates skipped. */
-  function addModelFromCatalog(id: string): void {
-    formModels = appendModelToText(formModels, id);
+  // ---- key select ---------------------------------------------------------
+
+  let keyOptions = $derived(keyChoices(envNames, editingPeer?.apiKey.macro ?? ""));
+
+  function selectKey(value: string): void {
+    keySelection = value;
+    if (value === KEY_CUSTOM || value === KEY_LITERAL) {
+      // Both reveal the free-text field; only a macro passes validation.
+      formApiKey = "";
+      formKeyTouched = true;
+      return;
+    }
+    formApiKey = value === KEY_NONE ? "" : value;
+    formKeyTouched = true;
   }
 
   /** The macro rule, checked in the browser before anything is sent. */
@@ -173,7 +271,7 @@
         approved,
         name: formName.trim(),
         proxy: formProxy.trim(),
-        apiKey: formApiKey,
+        apiKey: formApiKey.trim(),
         models: modelsFromText(formModels),
       };
     }
@@ -182,7 +280,7 @@
       name: formName.trim(),
       proxy: formProxy.trim(),
       // Only send the key when it was edited; "" alone would clear it.
-      apiKey: formKeyTouched ? formApiKey : undefined,
+      apiKey: formKeyTouched ? formApiKey.trim() : "",
       models: modelsFromText(formModels),
     };
   }
@@ -256,6 +354,9 @@
               <td class="px-3 py-2 font-mono text-xs break-all">{peer.proxy}</td>
               <td class="px-3 py-2">
                 <span class="font-mono text-xs">{secretLabel(peer.apiKey)}</span>
+                {#if peer.apiKey.macro && catalogs.find((c) => c.name === peer.name)?.keyMacroAvailable === false}
+                  <span class="text-destructive block text-[10px]">macro not resolvable</span>
+                {/if}
               </td>
               <td class="px-3 py-2">
                 <div class="flex max-w-xs flex-wrap gap-1">
@@ -303,66 +404,163 @@
         <Label.Root for="peer-name" class="text-sm">Name</Label.Root>
         <Input id="peer-name" bind:value={formName} disabled={editing === "edit"} placeholder="openrouter" class="mt-1" />
       </div>
+
       <div>
-        <Label.Root for="peer-proxy" class="text-sm">Proxy URL</Label.Root>
-        <Input id="peer-proxy" bind:value={formProxy} placeholder="https://openrouter.ai/api" class="mt-1" />
+        <Label.Root class="text-sm">Proxy URL</Label.Root>
+        <Select.Root
+          type="single"
+          value={proxySelection}
+          onValueChange={(v) => {
+            if (!v) return;
+            proxySelection = v;
+            formProxy = v === PROXY_CUSTOM ? "" : v;
+          }}
+        >
+          <Select.Trigger class="mt-1 w-full font-mono text-xs">
+            {proxySelection === PROXY_CUSTOM ? "custom…" : proxySelection}
+          </Select.Trigger>
+          <Select.Content>
+            {#each proxyOptions as choice (choice.value)}
+              <Select.Item value={choice.value}>{choice.label}</Select.Item>
+            {/each}
+            <Select.Item value={PROXY_CUSTOM}>custom…</Select.Item>
+          </Select.Content>
+        </Select.Root>
+        {#if proxySelection === PROXY_CUSTOM}
+          <Input
+            id="peer-proxy"
+            bind:value={formProxy}
+            placeholder="https://openrouter.ai/api"
+            class="mt-1 font-mono text-xs"
+            aria-label="Custom proxy URL"
+          />
+        {/if}
+        {#if !formProxy.trim()}
+          <p class="text-destructive mt-1 text-xs">proxy is required</p>
+        {/if}
       </div>
+
       <div>
-        <Label.Root for="peer-api-key" class="text-sm">API key (env macro only)</Label.Root>
-        <Input
-          id="peer-api-key"
-          bind:value={formApiKey}
-          oninput={() => (formKeyTouched = true)}
-          placeholder={'${env.MY_PEER_KEY}'}
-          class="mt-1 font-mono"
-        />
+        <Label.Root class="text-sm">API key (env macro name only)</Label.Root>
+        <Select.Root type="single" value={keySelection} onValueChange={(v) => v && selectKey(v)}>
+          <Select.Trigger class="mt-1 w-full font-mono text-xs">
+            {keyOptions.find((choice) => choice.value === keySelection)?.label ?? "No key"}
+          </Select.Trigger>
+          <Select.Content>
+            {#each keyOptions as choice (choice.value)}
+              <Select.Item value={choice.value}>{choice.label}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+        {#if keySelection === KEY_CUSTOM || keySelection === KEY_LITERAL}
+          <Input
+            id="peer-api-key"
+            bind:value={formApiKey}
+            oninput={() => (formKeyTouched = true)}
+            placeholder={'${env.MY_PEER_KEY}'}
+            class="mt-1 font-mono"
+            aria-label="Key environment macro"
+          />
+        {/if}
         <p class="text-muted-foreground mt-1 text-xs">
           {#if keyError()}
             <span class="text-destructive">{keyError()}</span>
           {:else}
-            An {'${env.VAR}'} reference the server resolves at startup. Literal secrets are rejected.
+            An {'${env.VAR}'} reference the server resolves at startup. Literal secrets are
+            rejected; the browser never holds a key value.
           {/if}
         </p>
       </div>
+
       <div>
-        <Label.Root for="peer-models" class="text-sm">Models</Label.Root>
-        <Textarea
-          id="peer-models"
-          bind:value={formModels}
-          rows={2}
-          placeholder="llama-3.1-8b, deepseek-chat"
-          class="mt-1"
-        />
-        <p class="text-muted-foreground mt-1 text-xs">Comma or newline separated model IDs.</p>
+        <Label.Root class="text-sm">Models</Label.Root>
+        {#if modelChips.length > 0}
+          <div class="mt-1 flex flex-wrap gap-1">
+            {#each modelChips as chip (chip.id)}
+              <span
+                class={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs ${chip.verified ? "border-success/40 bg-success/10" : "border-warning/40 bg-warning/10"}`}
+                title={chip.verified
+                  ? "in the provider's last catalog"
+                  : "not in the provider's last catalog — entered by hand"}
+              >
+                {chip.id}
+                {#if chip.verified}
+                  <CircleCheck class="size-3" />
+                {:else}
+                  <CircleAlert class="text-warning size-3" />
+                  <span class="sr-only">unverified</span>
+                {/if}
+                <button
+                  type="button"
+                  class="hover:text-destructive"
+                  aria-label={`Remove ${chip.id}`}
+                  onclick={() => removeModel(chip.id)}
+                >
+                  <X class="size-3" />
+                </button>
+              </span>
+            {/each}
+          </div>
+          {#if modelChips.some((chip) => !chip.verified)}
+            <p class="text-muted-foreground mt-1 text-[10px]">
+              Unverified: hand-entered IDs the provider did not list in the last check.
+            </p>
+          {/if}
+        {:else}
+          <p class="text-muted-foreground mt-1 text-xs">No models yet.</p>
+        {/if}
+
+        <div class="mt-2 flex gap-2">
+          <Input
+            bind:value={formModelInput}
+            placeholder="model-id (added as unverified)"
+            class="font-mono text-xs"
+            aria-label="Model ID to add"
+            onkeydown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addTypedModel();
+              }
+            }}
+          />
+          <Button variant="outline" size="sm" onclick={addTypedModel}>
+            <Plus />
+            Add
+          </Button>
+        </div>
 
         <div class="mt-2 rounded-md border p-2">
-          <div class="flex items-center gap-2">
-            <span class="text-xs font-medium">Live provider catalog</span>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium">Provider catalog</span>
             <Button
               variant="outline"
               size="sm"
               disabled={catalogLoading || !formProxy.trim()}
-              onclick={() => void loadCatalog()}
+              onclick={() => void checkModels()}
             >
-              {catalogLoading ? "Loading…" : "Load models from provider"}
+              <RefreshCw class={catalogLoading ? "animate-spin" : ""} />
+              {catalogLoading ? "Checking…" : "Check models now"}
             </Button>
+            {#if verifiedIds.length > 0}
+              <span class="text-muted-foreground text-[10px]">{verifiedIds.length} known</span>
+            {/if}
           </div>
           <p class="text-muted-foreground mt-1 text-xs">
-            Queries the provider's real /v1/models over its proxy, so picked IDs are the ones it
-            actually serves. The key never leaves the server.
+            The last catalog this server cached, or a fresh check over the provider's own
+            /v1/models. The key never leaves the server.
           </p>
-          {#if catalogOptions !== null || catalogError}
-            <div class="mt-2">
-              <ModelPicker
-                options={catalogOptions ?? []}
-                loading={false}
-                error={catalogError}
-                emptyText="The provider reported no models; enter IDs by hand."
-                placeholder="Filter provider models…"
-                onpick={addModelFromCatalog}
-              />
-            </div>
-          {/if}
+          <div class="mt-2">
+            <ModelPicker
+              groups={pickGroups}
+              loading={catalogLoading}
+              error={catalogError}
+              emptyText={formProxy.trim()
+                ? "No catalog cached for this provider yet; press Check models now, or add IDs by hand."
+                : "Enter a proxy first."}
+              placeholder="Filter provider models…"
+              onpick={addModel}
+            />
+          </div>
         </div>
       </div>
     </div>

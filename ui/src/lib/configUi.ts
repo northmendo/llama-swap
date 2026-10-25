@@ -30,10 +30,10 @@ export function secretLabel(ref: SecretRef | undefined): string {
   return ref.set ? "set (value not shown)" : "not set";
 }
 
-/** The four selector strategies the config accepts. */
-export const SELECTOR_STRATEGIES = ["warm", "pin", "spillover", "failover"] as const;
-
-export type SelectorStrategy = (typeof SELECTOR_STRATEGIES)[number];
+/** The four selector strategies, as a compile-time type only. The list the
+ * pickers render comes from the server (GET /agent/v1/config/schema), which
+ * serves the validator's own config.SelectorStrategies. */
+export type SelectorStrategy = "warm" | "pin" | "spillover" | "failover";
 
 /** One target's failover health, from /v1/models meta.llamaswap.failover. */
 export interface TargetHealth {
@@ -157,6 +157,195 @@ export function targetPickOptions(
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Grouped pick lists (peers.models, selector targets) — fed by the server's
+// cached provider catalogs, so a pick list never probes a provider on load.
+// ---------------------------------------------------------------------------
+
+/** One heading group of a pick list: a source (provider, or "this server"). */
+export interface PickGroup {
+  label: string;
+  options: ModelPickOption[];
+}
+
+/** Case-insensitive substring filter across groups, dropping empty groups. */
+export function filterPickGroups(groups: PickGroup[], query: string): PickGroup[] {
+  const needle = query.trim().toLowerCase();
+  return groups
+    .map((group) => ({
+      label: group.label,
+      options: needle
+        ? group.options.filter((opt) => opt.id.toLowerCase().includes(needle))
+        : group.options,
+    }))
+    .filter((group) => group.options.length > 0);
+}
+
+/** The model IDs a peer's cached catalog holds ([] when never checked). */
+export function catalogIds(models: { id: string }[] | undefined): string[] {
+  return (models ?? []).map((model) => model.id);
+}
+
+/** One group per provider, from the cached catalogs. Providers that were
+ * never checked (or failed) simply contribute nothing. */
+export function catalogGroups(
+  catalogs: { name: string; models: { id: string; ownedBy?: string; contextLength?: number }[] }[],
+): PickGroup[] {
+  return catalogs
+    .filter((entry) => entry.models.length > 0)
+    .map((entry) => ({
+      label: `peers.${entry.name}`,
+      options: entry.models.map((model) => ({
+        id: model.id,
+        hint: pickHint(model.ownedBy, model.contextLength),
+      })),
+    }));
+}
+
+/** Selector targets as groups: "this server" first, then one per provider
+ * (FQNs in the peerName/modelId wire form). Mirrors targetPickOptions, but
+ * keeps the source boundaries so a picker can filter by target type. */
+export function targetGroups(localModels: string[], catalogs: PickGroup[]): PickGroup[] {
+  const groups: PickGroup[] = [];
+  if (localModels.length > 0) {
+    groups.push({ label: "This server", options: localModels.map((id) => ({ id })) });
+  }
+  for (const group of catalogs) {
+    const peerName = group.label.replace(/^peers\./, "");
+    groups.push({
+      label: group.label,
+      options: group.options.map((opt) => ({ id: `${peerName}/${opt.id}`, hint: group.label })),
+    });
+  }
+  return groups;
+}
+
+/** Which source one existing target came from. Unknown targets (a peer that
+ * is no longer configured) keep the provider form when they look qualified. */
+export function targetSource(
+  target: string,
+  localModels: string[],
+  peerNames: string[],
+): "local" | "provider" {
+  if (localModels.includes(target)) return "local";
+  for (const peer of peerNames) {
+    if (target.startsWith(peer + "/")) return "provider";
+  }
+  return target.includes("/") ? "provider" : "local";
+}
+
+/** The target picker's groups filtered to one target type: "local" keeps
+ * this server's own models, "provider" keeps the peer catalogs. */
+export function groupsForSource(groups: PickGroup[], source: "local" | "provider"): PickGroup[] {
+  return groups.filter((group) =>
+    source === "local" ? group.label === "This server" : group.label.startsWith("peers."),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The finite value sets the config screen's pickers are fed from
+// ---------------------------------------------------------------------------
+
+/**
+ * Fallback selector strategies. The server's GET /agent/v1/config/schema is
+ * authoritative (it serves config.SelectorStrategies, the list the
+ * validator itself uses); this copy is only what a picker shows when that
+ * request failed, so the form never renders empty.
+ */
+export const FALLBACK_SELECTOR_STRATEGIES = ["warm", "pin", "spillover", "failover"] as const;
+
+export const DEFAULT_SELECTOR_STRATEGY = "failover";
+
+/** The strategy options to render: the server's list when it arrived. */
+export function strategyOptions(server: string[] | undefined): string[] {
+  const list = (server ?? []).filter((s) => s.trim().length > 0);
+  return list.length > 0 ? list : [...FALLBACK_SELECTOR_STRATEGIES];
+}
+
+/** The sentinel value of the proxy select's "custom…" row. */
+export const PROXY_CUSTOM = "__custom__";
+
+export interface ProxyChoice {
+  value: string;
+  label: string;
+  /** True for a proxy another peer in the config already uses. */
+  configured: boolean;
+}
+
+/**
+ * Proxy picker options: the proxies already configured (each peer's, with
+ * the peer names that use it), then the server's presets, then "custom…".
+ */
+export function proxyChoices(
+  peers: { name: string; proxy: string }[],
+  presets: { value: string; label: string }[],
+): ProxyChoice[] {
+  const out: ProxyChoice[] = [];
+  const seen = new Set<string>();
+  for (const peer of peers) {
+    const proxy = peer.proxy.trim();
+    if (!proxy) continue;
+    if (seen.has(proxy)) {
+      const existing = out.find((choice) => choice.value === proxy);
+      if (existing) existing.label = `${existing.label.split(" (")[0]}, ${peer.name}`;
+      continue;
+    }
+    seen.add(proxy);
+    out.push({ value: proxy, label: `${proxy} (${peer.name})`, configured: true });
+  }
+  for (const preset of presets) {
+    if (seen.has(preset.value)) continue;
+    seen.add(preset.value);
+    out.push({ value: preset.value, label: `${preset.label} — ${preset.value}`, configured: false });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The peers form's key picker: macro NAMES only, never values
+// ---------------------------------------------------------------------------
+
+/** The key select's sentinels. */
+export const KEY_NONE = "__none__";
+export const KEY_CUSTOM = "__custom__";
+export const KEY_LITERAL = "__literal__";
+
+export interface KeyChoice {
+  value: string;
+  label: string;
+}
+
+/**
+ * Key picker options: every ${env.VAR} name the server offers (flagged when
+ * it does not resolve), the macro the form already holds even when the
+ * server did not list it, then the clear / custom / literal fallbacks.
+ */
+export function keyChoices(
+  envNames: { name: string; set: boolean }[],
+  current: string,
+): KeyChoice[] {
+  const out: KeyChoice[] = [{ value: KEY_NONE, label: "No key" }];
+  const seen = new Set<string>();
+  for (const env of envNames) {
+    const value = `\${env.${env.name}}`;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push({ value, label: env.set ? env.name : `${env.name} (unavailable)` });
+  }
+  if (current && !seen.has(current)) {
+    out.push({ value: current, label: `${current} (not in the server environment list)` });
+  }
+  out.push({ value: KEY_CUSTOM, label: "Other env macro…" });
+  out.push({ value: KEY_LITERAL, label: "Literal (discouraged — rejected)" });
+  return out;
+}
+
+/** The key select value matching an arbitrary key field value. */
+export function keyChoiceFor(value: string, options: KeyChoice[]): string {
+  if (!value) return KEY_NONE;
+  return options.some((choice) => choice.value === value) ? value : KEY_CUSTOM;
 }
 
 export interface OutcomeBox {

@@ -29,10 +29,16 @@
   import {
     AgentUnauthorizedError,
     currentToken,
+    getConfigSchema,
     getConfigState,
+    getEnvNames,
+    getPeerCatalogs,
     listConfigBackups,
     type ConfigBackup,
+    type ConfigSchema,
     type ConfigState,
+    type EnvName,
+    type PeerCatalogEntry,
   } from "../lib/agentApi";
   import { failoverHealthFromModels, type SelectorMeta, type TargetHealth } from "../lib/configUi";
 
@@ -43,6 +49,14 @@
    * peer models; selectors excluded) — the local half of the target
    * pick list, from the same /v1/models payload as the health map. */
   let localModels = $state<string[]>([]);
+  /** The server's cached provider catalogs: what hydrates the model pickers
+   * without probing a single provider on page load. */
+  let catalogs = $state<PeerCatalogEntry[]>([]);
+  /** ${env.VAR} NAMES (never values) the key pickers offer. */
+  let envNames = $state<EnvName[]>([]);
+  /** The finite value sets from the server: strategies come from the
+   * config validator itself, so the picker cannot drift. */
+  let schema = $state<ConfigSchema | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -82,6 +96,33 @@
     return records.filter((r) => r.meta?.llamaswap?.type !== "selector").map((r) => r.id);
   }
 
+  /**
+   * Load the pickers' finite value sets: the cached provider catalogs, the
+   * env var NAMES a key can reference, and the schema's strategy list. Each
+   * is best-effort — a server that predates one of them must still render
+   * the config screen, only with that picker empty.
+   */
+  async function loadPickers(): Promise<void> {
+    try {
+      catalogs = await getPeerCatalogs();
+    } catch (e) {
+      if (authProblem(e)) return;
+      catalogs = [];
+    }
+    try {
+      envNames = await getEnvNames();
+    } catch (e) {
+      if (authProblem(e)) return;
+      envNames = [];
+    }
+    try {
+      schema = await getConfigSchema();
+    } catch (e) {
+      if (authProblem(e)) return;
+      schema = null;
+    }
+  }
+
   /** Load the config state, the backup list and the cascade health. */
   async function load(): Promise<void> {
     if (!currentToken()) {
@@ -106,6 +147,7 @@
         health = new Map();
         localModels = [];
       }
+      await loadPickers();
     } catch (e) {
       if (!authProblem(e)) error = message(e);
     } finally {
@@ -166,17 +208,29 @@
         <TabsTrigger value="agentapi">Agent API</TabsTrigger>
       </TabsList>
       <TabsContent value="peers" class="mt-4">
-        <PeersPanel peers={config.peers} onchanged={changed} onauth={panelAuthProblem} onerror={panelError} />
+        <PeersPanel
+          peers={config.peers}
+          {catalogs}
+          {envNames}
+          onchanged={changed}
+          onauth={panelAuthProblem}
+          onerror={panelError}
+          onrefresh={loadPickers}
+        />
       </TabsContent>
       <TabsContent value="cascades" class="mt-4">
         <CascadesPanel
           selectors={config.selectors}
           {health}
           peers={config.peers}
-          localModels={localModels}
+          {localModels}
+          {catalogs}
+          strategies={schema?.selectorStrategies ?? []}
+          defaultStrategy={schema?.defaultSelectorStrategy ?? "failover"}
           onchanged={changed}
           onauth={panelAuthProblem}
           onerror={panelError}
+          onrefresh={loadPickers}
         />
       </TabsContent>
       <TabsContent value="agentapi" class="mt-4">

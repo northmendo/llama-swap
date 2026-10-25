@@ -406,6 +406,77 @@ export interface PeerCatalogModel {
   contextLength?: number;
 }
 
+/** One provider's cached catalog (GET /agent/v1/config/peers.catalog). */
+export interface PeerCatalogEntry {
+  name: string;
+  /** The configured proxy URL — a URL, never a secret. */
+  proxy: string;
+  /** The ${env.VAR} NAME the config references for this peer's key,
+   * empty when the file holds no macro. The value never leaves the server. */
+  keyMacro?: string;
+  /** Whether that macro resolves in the server environment right now.
+   * Absent when there is no macro to resolve. */
+  keyMacroAvailable?: boolean;
+  /** The last successful catalog; empty when this peer was never checked. */
+  models: PeerCatalogModel[];
+  modelCount: number;
+  /** RFC3339 UTC time of the last successful check. */
+  checkedAt?: string;
+  latencyMs?: number;
+  /** True when the provider listed more models than the cache keeps. */
+  truncated?: boolean;
+  totalModels?: number;
+}
+
+/** The cached catalogs of every configured peer (GET). Fast: no upstream
+ * calls, so it is safe to call on page load. */
+export async function getPeerCatalogs(): Promise<PeerCatalogEntry[]> {
+  const data = await agentRequest<{ peers: PeerCatalogEntry[] }>(
+    "GET",
+    "/agent/v1/config/peers.catalog",
+  );
+  return data.peers ?? [];
+}
+
+/** The result of one live probe (POST). */
+export interface PeerCatalogProbe {
+  source: string;
+  models: PeerCatalogModel[];
+  checkedAt?: string;
+  latencyMs?: number;
+  modelCount: number;
+}
+
+/** One selectable ${env.VAR} name; `set` is whether it resolves now. */
+export interface EnvName {
+  name: string;
+  set: boolean;
+}
+
+/** GET /agent/v1/config/env — environment variable NAMES only, never values. */
+export async function getEnvNames(): Promise<EnvName[]> {
+  const data = await agentRequest<{ names: EnvName[] }>("GET", "/agent/v1/config/env");
+  return data.names ?? [];
+}
+
+/** One proxy preset the peers form offers. */
+export interface ProxyPreset {
+  value: string;
+  label: string;
+}
+
+/** GET /agent/v1/config/schema — the finite sets the config pickers use.
+ * The strategy list is the validator's own, so a picker cannot drift. */
+export interface ConfigSchema {
+  selectorStrategies: string[];
+  defaultSelectorStrategy: string;
+  proxyPresets: ProxyPreset[];
+}
+
+export async function getConfigSchema(): Promise<ConfigSchema> {
+  return agentRequest<ConfigSchema>("GET", "/agent/v1/config/schema");
+}
+
 /** Which provider to query: a configured peer by name, or a draft peer
  * by proxy (with an optional ${env.VAR} key macro — never a literal). */
 export interface PeerCatalogInput {
@@ -416,17 +487,22 @@ export interface PeerCatalogInput {
 
 /**
  * POST /agent/v1/config/peers.catalog — the provider's live /v1/models
- * listing for the pick list. With "name" the server uses the peer's
- * configured proxy and key server-side, so a key never travels to the
- * UI in either direction. Rejects with a 502 AgentApiError when the
- * provider is unreachable or rejects the key.
+ * listing. With "name" the server uses the peer's configured proxy and key
+ * server-side, so a key never travels to the UI in either direction.
+ * Rejects with a 502 AgentApiError when the provider is unreachable or
+ * rejects the key. A success also refreshes the server's catalog cache.
+ */
+export async function probePeerCatalog(input: PeerCatalogInput): Promise<PeerCatalogProbe> {
+  return agentRequest<PeerCatalogProbe>("POST", "/agent/v1/config/peers.catalog", input);
+}
+
+/**
+ * The provider's live model IDs for a pick list (the probe's model array).
+ * Rejects with a 502 AgentApiError when the provider is unreachable or
+ * rejects the key.
  */
 export async function fetchPeerCatalog(input: PeerCatalogInput): Promise<PeerCatalogModel[]> {
-  const data = await agentRequest<{ source: string; models: PeerCatalogModel[] }>(
-    "POST",
-    "/agent/v1/config/peers.catalog",
-    input,
-  );
+  const data = await probePeerCatalog(input);
   return data.models ?? [];
 }
 

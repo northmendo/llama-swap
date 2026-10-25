@@ -2,24 +2,29 @@
   /**
    * Searchable model pick list for the Config view's forms. Pure
    * presentation: the parent owns loading, errors and the option list
-   * (from the live provider catalog, local models, or both); this
-   * component renders the search box, the filtered rows and the
-   * loading/empty/error states. One dead provider shows one inline
-   * error here and never breaks the panel around it.
+   * (from the server's cached provider catalogs, local models, or both);
+   * this component renders the search box, the filtered rows — grouped by
+   * source when the caller passes groups — and the loading/empty/error
+   * states. One dead provider shows one inline error here and never
+   * breaks the panel around it.
    */
   import { Input } from "$lib/components/ui/input/index.js";
   import { Search } from "@lucide/svelte";
-  import { filterPickOptions, type ModelPickOption } from "../../lib/configUi";
+  import { filterPickOptions, filterPickGroups, type ModelPickOption, type PickGroup } from "../../lib/configUi";
 
   let {
     options = [],
+    groups,
     loading = false,
     error = "",
     emptyText = "No models to show.",
     placeholder = "Search models…",
     onpick,
   }: {
+    /** A single flat list. Ignored when `groups` is set. */
     options?: ModelPickOption[];
+    /** Grouped options: one section per source (provider, this server). */
+    groups?: PickGroup[];
     loading?: boolean;
     error?: string;
     emptyText?: string;
@@ -28,7 +33,11 @@
   } = $props();
 
   let query = $state("");
-  let filtered = $derived(filterPickOptions(options, query));
+  let filtered = $derived(groups ? [] : filterPickOptions(options, query));
+  let filteredGroups = $derived(groups ? filterPickGroups(groups, query) : []);
+  let total = $derived(
+    groups ? groups.reduce((sum, group) => sum + group.options.length, 0) : options.length,
+  );
 </script>
 
 <div class="space-y-1.5">
@@ -39,7 +48,7 @@
       bind:value={query}
       {placeholder}
       aria-label="Filter models"
-      disabled={loading || options.length === 0}
+      disabled={loading || total === 0}
     />
   </div>
 
@@ -49,9 +58,33 @@
     </p>
   {:else if loading}
     <p class="text-muted-foreground p-2 text-xs">Loading models from the provider…</p>
-  {:else if filtered.length === 0}
-    <p class="text-muted-foreground p-2 text-xs">{emptyText}</p>
-  {:else}
+  {:else if groups && filteredGroups.length > 0}
+    <div class="max-h-56 overflow-y-auto rounded-md border text-xs">
+      {#each filteredGroups as group (group.label)}
+        <div class="border-b last:border-b-0">
+          <div class="bg-muted/60 text-muted-foreground px-2.5 py-1 text-[10px] font-medium uppercase">
+            {group.label}
+          </div>
+          <ul>
+            {#each group.options as opt (opt.id)}
+              <li class="border-t first:border-t-0">
+                <button
+                  type="button"
+                  class="hover:bg-accent w-full px-2.5 py-1.5 text-left"
+                  onclick={() => onpick(opt.id)}
+                >
+                  <span class="block font-mono">{opt.id}</span>
+                  {#if opt.hint}
+                    <span class="text-muted-foreground block text-[10px]">{opt.hint}</span>
+                  {/if}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/each}
+    </div>
+  {:else if !groups && filtered.length > 0}
     <ul class="max-h-48 overflow-y-auto rounded-md border text-xs">
       {#each filtered as opt (opt.id)}
         <li class="border-b last:border-b-0">
@@ -68,5 +101,7 @@
         </li>
       {/each}
     </ul>
+  {:else}
+    <p class="text-muted-foreground p-2 text-xs">{emptyText}</p>
   {/if}
 </div>
