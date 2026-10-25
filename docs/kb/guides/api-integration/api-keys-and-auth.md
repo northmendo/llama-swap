@@ -4,7 +4,7 @@ summary: apiKeys authentication has no per-key rate limits or user permissions; 
 category: guides
 tags: [security, api-keys, auth, secrets, env, rate-limit, users, permissions, access-control]
 config_keys: [apiKeys, macros, peers.*.apiKey, models.*.env]
-updated: 2026-08-25
+updated: 2026-10-25
 ---
 
 # API keys and keeping secrets out of your config
@@ -19,15 +19,33 @@ apiKeys:
   - "sk-hunter2"
 ```
 
-Clients may present it as `Authorization: Bearer <key>`, `x-api-key: <key>`, or
-HTTP Basic. The web UI and everything under `/api/` are covered too.
+Clients may present it as an `Authorization: Bearer` header, an `x-api-key`
+header, or HTTP Basic. Everything under `/api/` is covered too.
 
-A handful of static files stay reachable without a key regardless:
+The web UI is split: the app itself loads without a key, but its API calls
+need one. Every `GET` under `/ui/` — the app shell, its hashed JS/CSS
+bundles, the SPA route fallbacks — is served without a key, because a
+browser cannot attach one to a document or asset fetch. There is no API
+route under `/ui/`; the handler only serves static UI files. The UI's own
+data calls (`/v1/...`, `/api/...`, `/logs/...`) are gated like any other
+client: on the first 401 the UI opens its key dialog, stores the key in
+this browser's localStorage (the same stored key the Engines/Discovery
+views use for `/agent/v1`), and attaches it as a Bearer header from then
+on.
+
 `/favicon.ico`, `/ui/site.webmanifest`, and the two icons it references
-(`/ui/web-app-manifest-192x192.png`, `/ui/web-app-manifest-512x512.png`).
-Browsers fetch all of these themselves — the favicon for the tab, the
-manifest and its icons to decide whether to offer installing llama-swap as a
-PWA — and have no way to attach your API key to those requests.
+(`/ui/web-app-manifest-192x192.png`, `/ui/web-app-manifest-512x512.png`)
+are covered by that `/ui/` exemption — and also stay reachable when you
+serve the UI from somewhere else. Browsers fetch all of these themselves
+— the favicon for the tab, the manifest and its icons to decide whether
+to offer installing llama-swap as a PWA — and have no way to attach your
+API key to those requests.
+
+`GET /health` and `/health`-style liveness probes (`/wol-health`) also
+stay public, so uptime checkers do not need the key.
+
+**With no `apiKeys` at all, nothing changes**: every endpoint is open,
+exactly as before, and the UI never asks for a key.
 
 Generate a real one:
 

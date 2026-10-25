@@ -427,7 +427,15 @@ func (s *Server) routes() {
 	mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
 		redirectRelative(w, "ui/", http.StatusPermanentRedirect)
 	})
-	mux.Handle("GET /ui/", chain.New(authMW).ThenFunc(s.handleUI))
+	// The app shell and everything it loads (hashed JS/CSS bundles,
+	// client-side route fallbacks) live under /ui/, and a browser cannot
+	// attach an API key to a document navigation or asset fetch. Serve all
+	// GETs under /ui/ without auth — extending the PWA exemption below
+	// (issue #1175) — since the only handler reachable here serves static
+	// UI files, never a JSON API route. When apiKeys is unset the auth
+	// middleware was a pass-through anyway, so nothing changes for keyless
+	// servers.
+	mux.HandleFunc("GET /ui/", s.handleUI)
 	// The browser fetches the web app manifest - and the icons it references -
 	// itself while deciding whether to offer installing the PWA, and it has no
 	// way to attach an API key to those requests. Serve them without auth so
