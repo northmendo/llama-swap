@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type { Component, ComponentType, SvelteComponent } from "svelte";
-  import Router from "svelte-spa-router";
+  import Router, { replace } from "svelte-spa-router";
   import { wrap } from "svelte-spa-router/wrap";
   import AppSidebar from "./components/AppSidebar.svelte";
   import RouteLoadingImpl from "./components/RouteLoading.svelte";
@@ -17,6 +17,7 @@
     checkPerformanceEnabled,
     enableAPIEvents,
     fetchPlaygroundModels,
+    helpAgentEnabled,
     profiles,
     setActiveProfile,
   } from "./stores/api";
@@ -161,6 +162,11 @@
     checkPerformanceEnabled();
   }
 
+  // helpagent.disable in the config hides Help; a bookmarked /help goes home.
+  $effect(() => {
+    if (!$helpAgentEnabled && $currentRoute === "/help") replace("/");
+  });
+
   onMount(() => {
     const cleanupScreenWidth = initScreenWidth();
     const cleanupSystemTheme = initSystemThemeListener();
@@ -256,13 +262,15 @@
             <RouteLoading />
           {/if}
         </div>
-        <div class="h-full" class:hidden={$currentRoute !== "/help"}>
-          {#if HelpComponent}
-            <HelpComponent />
-          {:else}
-            <RouteLoading />
-          {/if}
-        </div>
+        {#if $helpAgentEnabled}
+          <div class="h-full" class:hidden={$currentRoute !== "/help"}>
+            {#if HelpComponent}
+              <HelpComponent />
+            {:else}
+              <RouteLoading />
+            {/if}
+          </div>
+        {/if}
         <div class="h-full" class:hidden={$currentRoute === "/playground" || $currentRoute === "/help"}>
           <Router {routes} on:routeLoaded={handleRouteLoaded} />
         </div>

@@ -11,6 +11,7 @@ import (
 
 const DEFAULT_GROUP_ID = "(default)"
 const DEFAULT_UNLOAD_TIMEOUT = 10
+const DEFAULT_MAX_REQUEST_BODY_MB = 250
 const (
 	LogToStdoutProxy    = "proxy"
 	LogToStdoutUpstream = "upstream"
@@ -155,6 +156,12 @@ type UIActivityConfig struct {
 	SessionID []string `yaml:"session_id" json:"session_id"`
 }
 
+// HelpAgentConfig controls the UI's Help page and the /api/mcp endpoint that
+// serves its tools.
+type HelpAgentConfig struct {
+	Disable bool `yaml:"disable" json:"disable"`
+}
+
 // ProfileConfig describes a runtime-selectable set of model ID rewrites.
 // Empty pin targets disable the corresponding model ID while the profile is
 // active. YAML null values decode to the same empty string representation.
@@ -190,6 +197,7 @@ type Config struct {
 	Store              *Store            `yaml:"store"`
 	UI                 UIConfig          `yaml:"ui"`
 	Performance        PerformanceConfig `yaml:"performance"`
+	HelpAgent          HelpAgentConfig   `yaml:"helpagent"`
 	GlobalTTL          int               `yaml:"globalTTL"`
 	UnloadTimeout      int               `yaml:"unloadTimeout"`
 
@@ -235,6 +243,10 @@ type Config struct {
 	// GlobalConcurrencyLimit caps the number of inference requests served at
 	// once across all models. 0 (default) means no limit. See issue #1086.
 	GlobalConcurrencyLimit int `yaml:"globalConcurrencyLimit"`
+
+	// MaxRequestBodyMB caps the size, in megabytes, of request bodies on
+	// model-dispatched POSTs. Larger requests get HTTP 413.
+	MaxRequestBodyMB int `yaml:"maxRequestBodyMB"`
 
 	// routing is the canonical source for swap/scheduling configuration.
 	// New code must read Routing, never the backwards-compat fields below.
@@ -293,6 +305,16 @@ func (c Config) TailcatEnabled() bool {
 	return c.tailcatEnabled
 }
 
+// MaxRequestBodyBytes returns MaxRequestBodyMB in bytes. Configs not built by
+// LoadConfigFromReader leave MaxRequestBodyMB at 0 and get the default.
+func (c Config) MaxRequestBodyBytes() int64 {
+	mb := c.MaxRequestBodyMB
+	if mb <= 0 {
+		mb = DEFAULT_MAX_REQUEST_BODY_MB
+	}
+	return int64(mb) << 20
+}
+
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.
 type RoutingConfig struct {
 	Scheduler SchedulerConfig `yaml:"scheduler"`
@@ -313,13 +335,14 @@ type FifoConfig struct {
 }
 
 type RouterConfig struct {
-	Use      string         `yaml:"use"` // "group" (default) | "matrix"
+	Use      string         `yaml:"use"` // "group" (default) | "matrix" | "capacity"
 	Settings RouterSettings `yaml:"settings"`
 }
 
 type RouterSettings struct {
-	Groups map[string]GroupConfig `yaml:"groups"`
-	Matrix *MatrixConfig          `yaml:"matrix"`
+	Groups   map[string]GroupConfig `yaml:"groups"`
+	Matrix   *MatrixConfig          `yaml:"matrix"`
+	Capacity *CapacityConfig        `yaml:"capacity"`
 }
 
 func (c *Config) RealModelName(search string) (string, bool) {

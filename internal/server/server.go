@@ -21,6 +21,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/hw"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/mcptools"
+	"github.com/mostlygeek/llama-swap/internal/mcptools/sourcecode"
 	"github.com/mostlygeek/llama-swap/internal/perf"
 	"github.com/mostlygeek/llama-swap/internal/router"
 	"github.com/mostlygeek/llama-swap/internal/store"
@@ -246,11 +247,22 @@ type BuildInfo struct {
 	Date    string
 }
 
-func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.Store, build BuildInfo, hardware *hw.HardwareSnapshot, refs *docagent.Docs) (*Server, error) {
+// New constructs the selected local router, peer router, and HTTP handlers
+// using the supplied configuration and shared services.
+//
+// code serves llama-swap's own source over MCP. It is built once by the caller
+// and shared across reloads, so its checkout is fetched once per process; nil
+// leaves the code__* tools out.
+func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.Store, build BuildInfo, hardware *hw.HardwareSnapshot, refs *docagent.Docs, code *sourcecode.Provider) (*Server, error) {
 	var local router.LocalRouter
 	var err error
 
 	switch cfg.Routing.Router.Use {
+	case "capacity":
+		local, err = router.NewCapacity(cfg, logs)
+		if err != nil {
+			return nil, fmt.Errorf("creating capacity router: %w", err)
+		}
 	case "matrix":
 		local, err = router.NewMatrix(cfg, logs)
 		if err != nil {
@@ -294,11 +306,15 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 
 	// SysProvider is constructed here because this is where perf and hardware
 	// are in scope; wiring those in later is a change to internal/mcptools.
-	tools, err := mcptools.New(
+	providers := []mcptools.Provider{
 		docagent.NewDocsProvider(refs),
 		mcptools.NewSysProvider(nil),
 		config.NewConfigProvider(cfg),
-	)
+	}
+	if code != nil {
+		providers = append(providers, code)
+	}
+	tools, err := mcptools.New(providers...)
 	if err != nil {
 		return nil, fmt.Errorf("building the MCP tool registry: %w", err)
 	}
@@ -376,7 +392,7 @@ func stripAudioAPIPrefix(r *http.Request) {
 func (s *Server) routes() {
 
 	authMW := CreateAuthMiddleware(s.cfg)
-	modelMWs := []chain.Middleware{authMW, createContentTypeMiddleware()}
+	modelMWs := []chain.Middleware{authMW, createContentTypeMiddleware(s.cfg.MaxRequestBodyBytes())}
 	// globalConcurrencyLimit guards the top of the inference chain; a limit of
 	// 0 (the default) means no limit, so the handler is left out of the chain
 	// entirely rather than wrapping every request in a no-op semaphore.
@@ -498,7 +514,9 @@ func (s *Server) routes() {
 	// consumed by the Playground's agentic chat and by any external MCP client.
 	// Registered without a method so non-POST reaches the handler and gets a
 	// 405 with Allow, rather than the mux's bare 404.
-	mux.Handle("/api/mcp", apiChain.ThenFunc(s.handleAPIMCP))
+	if !s.cfg.HelpAgent.Disable {
+		mux.Handle("/api/mcp", apiChain.ThenFunc(s.handleAPIMCP))
+	}
 
 	// Agent API (/agent/v1/...): bearer-authenticated discovery/config
 	// surface for automation. Register mounts nothing when the config's
@@ -558,12 +576,21 @@ func (s *Server) ServeTailcatHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if inference && r.Method != http.MethodOptions {
 		// Normalize first so the model lookup sees the same body format the
-		// model chain will.
-		if bodyErr := prepareModelBody(w, r); bodyErr != nil {
+		// model chain will. A body over the size cap gets a 413 so the client
+		// knows to send less; other body errors look like an unknown model.
+		if bodyErr := prepareModelBody(w, r, s.cfg.MaxRequestBodyBytes()); bodyErr != nil {
+			if bodyErr.status == http.StatusRequestEntityTooLarge {
+				swaputil.SendResponse(w, r, bodyErr.status, bodyErr.message)
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
 		model, err := swaputil.ExtractModel(r)
+		if bodyErr := bodyTooLargeFrom(err); bodyErr != nil {
+			swaputil.SendResponse(w, r, bodyErr.status, bodyErr.message)
+			return
+		}
 		if err != nil || !tailcatModelAllowed(tc.Models, model) {
 			http.NotFound(w, r)
 			return
