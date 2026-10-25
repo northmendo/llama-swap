@@ -73,6 +73,12 @@ type peerCatalogResponse struct {
 	// Source says what was queried: "peers.<name>" or "proxy".
 	Source string                `json:"source"`
 	Models []peerCatalogModelDTO `json:"models"`
+	// CheckedAt, LatencyMs and ModelCount mirror what the cache now
+	// holds, so a caller that just probed can update its view without a
+	// second (cached) read.
+	CheckedAt  string `json:"checkedAt,omitempty"`
+	LatencyMs  int64  `json:"latencyMs,omitempty"`
+	ModelCount int    `json:"modelCount"`
 }
 
 // handlePeerCatalog is POST /agent/v1/config/peers.catalog.
@@ -134,6 +140,8 @@ func (a *api) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), catalogTimeout)
 	defer cancel()
 
+	started := time.Now()
+
 	client := capcompat.NewClient(base, timeouts)
 	if apiKey != "" {
 		// The same dual header the peer's own reverse proxy injects
@@ -169,7 +177,19 @@ func (a *api) handlePeerCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 
-	writeJSON(w, r, http.StatusOK, peerCatalogResponse{Source: source, Models: models})
+	// Record the success so the cached read (GET, providerscache.go) and
+	// therefore the config pickers stay warm. Only this provider's entry
+	// is touched, so one dead provider never disturbs another's catalog.
+	latency := time.Since(started)
+	a.storeCatalog(name, models, latency)
+
+	writeJSON(w, r, http.StatusOK, peerCatalogResponse{
+		Source:     source,
+		Models:     models,
+		CheckedAt:  time.Now().UTC().Format(time.RFC3339),
+		LatencyMs:  latency.Milliseconds(),
+		ModelCount: len(models),
+	})
 }
 
 // adhocPeerTimeouts returns the transport timeouts an unsaved peer gets:

@@ -34,6 +34,12 @@
 //	POST /agent/v1/config/peers.catalog   live /v1/models pick list for one
 //	                                      peer (by name or draft proxy+key
 //	                                      macro) — see peercatalog.go
+//	GET  /agent/v1/config/peers.catalog   every peer's cached catalog, no
+//	                                      upstream calls — see providerscache.go
+//	GET  /agent/v1/config/schema          the finite value sets the config
+//	                                      pickers are fed from
+//	GET  /agent/v1/config/env             env var NAMES (never values) a
+//	                                      peer key macro can reference
 //	POST /agent/v1/config/selectors.add    same contract for cascades
 //	POST /agent/v1/config/selectors.update
 //	POST /agent/v1/config/selectors.remove
@@ -86,6 +92,11 @@ type Options struct {
 	// routes that need state answer 503 until main wires one in.
 	EngineStatePath func() string
 
+	// ProvidersCachePath returns the provider catalog cache file
+	// (providers-cache.json beside the config). Read per request like
+	// ConfigPath; empty falls back to deriving it from ConfigPath.
+	ProvidersCachePath func() string
+
 	// Runtime is the running-models view the update routes use to
 	// refuse swaps under running models and to stop them on force.
 	// Nil disables it: checks and state still work, but an approved
@@ -94,7 +105,7 @@ type Options struct {
 }
 
 // api is the mounted handler set. It is immutable after construction,
-// except for the apply mutex.
+// except for the apply mutex and the lazily loaded catalog cache.
 type api struct {
 	opts Options
 	cfg  config.Config
@@ -102,6 +113,12 @@ type api struct {
 	// applyMu serializes apply calls so two concurrent requests cannot
 	// interleave read-modify-write cycles on the config file.
 	applyMu sync.Mutex
+
+	// catalogMu guards the provider catalog cache, which is loaded from
+	// disk on first use (providerscache.go).
+	catalogMu     sync.Mutex
+	catalog       *catalogCache
+	catalogLoaded bool
 }
 
 // Register mounts the agent API routes on mux when the config enables
@@ -136,6 +153,9 @@ func Register(mux *http.ServeMux, opts Options) {
 	inner.HandleFunc("POST /agent/v1/config/peers.update", a.handlePeerUpdate)
 	inner.HandleFunc("POST /agent/v1/config/peers.remove", a.handlePeerRemove)
 	inner.HandleFunc("POST /agent/v1/config/peers.catalog", a.handlePeerCatalog)
+	inner.HandleFunc("GET /agent/v1/config/peers.catalog", a.handlePeerCatalogCache)
+	inner.HandleFunc("GET /agent/v1/config/schema", a.handleConfigSchema)
+	inner.HandleFunc("GET /agent/v1/config/env", a.handleEnvNames)
 	inner.HandleFunc("POST /agent/v1/config/selectors.add", a.handleSelectorAdd)
 	inner.HandleFunc("POST /agent/v1/config/selectors.update", a.handleSelectorUpdate)
 	inner.HandleFunc("POST /agent/v1/config/selectors.remove", a.handleSelectorRemove)

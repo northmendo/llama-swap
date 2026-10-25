@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/mostlygeek/llama-swap/docs"
+	"github.com/mostlygeek/llama-swap/internal/agentapi"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/discovery"
 	"github.com/mostlygeek/llama-swap/internal/docagent"
@@ -478,6 +479,10 @@ func main() {
 	}
 	initialSrv.SetEngineStatePath(engineupdate.DefaultStatePath(engineStateSource))
 
+	// The provider catalog cache lives beside the same config source, so
+	// a restart keeps the last catalogs the pickers were hydrated from.
+	initialSrv.SetProvidersCachePath(agentapi.DefaultProvidersCachePath(engineStateSource))
+
 	// activeSrv is swapped atomically during hot reload.
 	var activeMu sync.RWMutex
 	activeSrv := initialSrv
@@ -589,6 +594,7 @@ func main() {
 		}
 		newSrv.SetConfigSource(*flagConfig, *flagWatchConfig)
 		newSrv.SetEngineStatePath(engineupdate.DefaultStatePath(engineStateSource))
+		newSrv.SetProvidersCachePath(agentapi.DefaultProvidersCachePath(engineStateSource))
 
 		if currentTailcat != nil {
 			newSrv.SetTailcatAddress(currentTailcat.Address())

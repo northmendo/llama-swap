@@ -89,6 +89,12 @@ type Server struct {
 	// that need state (503).
 	engineStatePath string
 
+	// providersCachePath is the agent API's provider catalog cache
+	// (providers-cache.json), next to the -config file or inside
+	// -config-dir. Set by main after New; empty makes the agent API
+	// derive it from the config path.
+	providersCachePath string
+
 	local router.LocalRouter
 	peer  router.Router
 
@@ -123,6 +129,15 @@ func (s *Server) SetConfigSource(configPath string, watchConfig bool) {
 // including the hot-reload ones; empty leaves those routes disabled.
 func (s *Server) SetEngineStatePath(path string) {
 	s.engineStatePath = path
+}
+
+// SetProvidersCachePath tells the agent API where to keep its provider
+// catalog cache (providers-cache.json, next to the -config file or inside
+// -config-dir). Called by main after every Server construction, including
+// the hot-reload ones; empty makes the agent API derive it from the config
+// path.
+func (s *Server) SetProvidersCachePath(path string) {
+	s.providersCachePath = path
 }
 
 func (s *Server) TailcatAddress() string {
@@ -501,12 +516,13 @@ func (s *Server) routes() {
 	// SetConfigSource after this Server is built (mirroring how
 	// SetTailcatAddress is handled).
 	agentapi.Register(mux, agentapi.Options{
-		Cfg:             s.cfg,
-		ConfigPath:      func() string { return s.configPath },
-		WatchConfig:     func() bool { return s.watchConfig },
-		EngineStatePath: func() string { return s.engineStatePath },
-		Runtime:         newEngineRuntime(s.cfg, s.local),
-		Logger:          s.logs.ProxyLogs,
+		Cfg:                s.cfg,
+		ConfigPath:         func() string { return s.configPath },
+		WatchConfig:        func() bool { return s.watchConfig },
+		EngineStatePath:    func() string { return s.engineStatePath },
+		ProvidersCachePath: func() string { return s.providersCachePath },
+		Runtime:            newEngineRuntime(s.cfg, s.local),
+		Logger:             s.logs.ProxyLogs,
 	})
 
 	s.mux = mux
