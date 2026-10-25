@@ -43,6 +43,11 @@ func stripCodeFences(s string) string {
 	return strings.TrimSpace(strings.Join(blocks, "\n"))
 }
 
+// strictModelConfig is config.ModelConfig with no methods attached, so a
+// strict yaml decoder (KnownFields(true)) can reject unknown stanza fields.
+// Converting back to config.ModelConfig is a plain type conversion.
+type strictModelConfig config.ModelConfig
+
 // parseStanza gates the LLM's answer before it is trusted: the answer
 // must parse as YAML (fences tolerated), must be a single model stanza
 // (a bare `modelID:` mapping, optionally wrapped in `models:`) for the
@@ -81,14 +86,29 @@ func parseStanza(content, wantModelID string) (string, config.ModelConfig, strin
 	// Strict decode: model IDs are free-form map keys, but every field
 	// inside a stanza must be a real model field. Unknown fields are how
 	// hallucinated config sneaks in, so they fail the gate here.
+	//
+	// The strict pass decodes into strictModelConfig, a type definition of
+	// config.ModelConfig that carries no methods. config.ModelConfig's own
+	// UnmarshalYAML takes a *yaml.Node and re-decodes through node.Decode(),
+	// which starts a fresh decoder and therefore ignores the KnownFields(true)
+	// set below (upstream v266 needs that node-based form to reject fractional
+	// capacity values). A method-less copy keeps this gate strict.
 	stanzaBytes, err := yaml.Marshal(root)
 	if err != nil {
 		return "", config.ModelConfig{}, "", fmt.Errorf("encoding the stanza for validation: %w", err)
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(stanzaBytes))
 	dec.KnownFields(true)
+	var strict map[string]strictModelConfig
+	if err := dec.Decode(&strict); err != nil {
+		return "", config.ModelConfig{}, "", fmt.Errorf("the stanza does not match the model-stanza schema: %w", err)
+	}
+
+	// A second pass through the real type applies config's model defaults
+	// (default proxy, check endpoint, TTL) that the method-less copy skips,
+	// and runs the model's own field checks such as fractional capacities.
 	var models map[string]config.ModelConfig
-	if err := dec.Decode(&models); err != nil {
+	if err := yaml.Unmarshal(stanzaBytes, &models); err != nil {
 		return "", config.ModelConfig{}, "", fmt.Errorf("the stanza does not match the model-stanza schema: %w", err)
 	}
 
