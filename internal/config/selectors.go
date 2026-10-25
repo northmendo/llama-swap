@@ -15,6 +15,28 @@ const (
 	SelectorStrategyFailover  = "failover"
 )
 
+// SelectorStrategies lists every strategy validateSelectors accepts, in
+// the order the validator's error message presents them. It is the one
+// source of truth for callers that need the set (the config UI's strategy
+// picker, served over the agent API) so a picker can never drift from
+// what the validator actually allows.
+var SelectorStrategies = []string{
+	SelectorStrategyWarm,
+	SelectorStrategyPin,
+	SelectorStrategySpillover,
+	SelectorStrategyFailover,
+}
+
+// ValidSelectorStrategy reports whether s is one of SelectorStrategies.
+func ValidSelectorStrategy(s string) bool {
+	for _, strategy := range SelectorStrategies {
+		if strategy == s {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultSelectorFailoverCooldown is how long a failover target that failed
 // is skipped before it is tried again, when settings.cooldown is not set.
 const DefaultSelectorFailoverCooldown = 60 * time.Second
@@ -78,12 +100,11 @@ func validateSelectors(config Config) error {
 			return fmt.Errorf("selectors.%s: name conflicts with model alias %q", selectorID, selectorID)
 		}
 
-		switch selector.Strategy {
-		case SelectorStrategyPin, SelectorStrategyWarm, SelectorStrategySpillover, SelectorStrategyFailover:
-		case "":
+		switch {
+		case selector.Strategy == "":
 			return fmt.Errorf("selectors.%s.strategy is required", selectorID)
-		default:
-			return fmt.Errorf("selectors.%s.strategy: unknown strategy %q (valid: warm, pin, spillover, failover)", selectorID, selector.Strategy)
+		case !ValidSelectorStrategy(selector.Strategy):
+			return fmt.Errorf("selectors.%s.strategy: unknown strategy %q (valid: %s)", selectorID, selector.Strategy, strings.Join(SelectorStrategies, ", "))
 		}
 		if len(selector.Targets) == 0 {
 			return fmt.Errorf("selectors.%s.targets must contain at least one entry", selectorID)

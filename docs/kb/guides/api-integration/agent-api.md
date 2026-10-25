@@ -437,6 +437,78 @@ validator's exact message — nothing is written.
   Disabling warns in the response: after the next reload the
   `/agent/v1` routes (including this one) are unmounted.
 
+### POST /agent/v1/config/peers.catalog
+
+The live provider pick list: one peer's real `/v1/models` catalog,
+fetched over the peer's own proxy, so model IDs are picked from what
+the provider actually serves instead of hand-typed. Read-only — nothing
+is validated, written or restarted. The web UI's Config page drives it
+for the peers form and the cascade target picker.
+
+Two addressing modes, exactly one per request:
+
+- `{"name": "openrouter"}` — a configured peer. Proxy, API key and
+  timeouts all come from the server-side config, so a key the file
+  holds even as a literal never travels anywhere. Unknown names are a
+  `404`.
+- `{"proxy": "https://…", "apiKey": "${env.MY_KEY}"?}` — a peer still
+  being drafted in the add form. The key accepts an `${env.VAR}`
+  reference only (the same rule as the write verbs; a literal is a
+  `400`) and is resolved from the environment server-side.
+
+The answer is the provider's listing, sorted and deduplicated:
+
+```json
+{
+  "source": "peers.openrouter",
+  "models": [
+    { "id": "deepseek/deepseek-chat-v4", "ownedBy": "deepseek",
+      "contextLength": 131072 }
+  ],
+  "checkedAt": "2026-10-25T20:22:10Z",
+  "latencyMs": 84,
+  "modelCount": 1
+}
+```
+
+Degradation is deliberate and per provider: an unreachable proxy, a
+rejected key or a slow provider is a clean `502` carrying the reason
+(`provider catalog unavailable: …`) — one failed query never touches
+another peer or blocks editing anything else. `tailcat://` proxies
+answer a `400` suggesting manual entry, since Tailcat is not plain
+HTTP. The whole query is capped at 15 seconds.
+
+### GET /agent/v1/config/peers.catalog
+
+The cached catalogs: every configured peer with the model list from its
+last successful `POST` above, plus `checkedAt`, `latencyMs`,
+`keyMacro` (the `${env.VAR}` NAME only, never a value),
+`keyMacroAvailable` (does that macro resolve in the server's
+environment right now) and `modelCount`. It makes no upstream calls, so
+the web UI paints its dropdowns from it on page load instead of probing
+every provider. The cache lives beside the config file in
+`providers-cache.json` (mode `0600`, atomic rename, model IDs and
+metadata only — never a key or a header) and survives a restart. It is
+capped at 500 models per provider and 64 providers, dropping the
+oldest entries first.
+
+### GET /agent/v1/config/schema
+
+The finite value sets the config screen's pickers are fed from:
+`selectorStrategies` (the exact list the config validator accepts, with
+`defaultSelectorStrategy`) and `proxyPresets`. Reading them from the
+server is what keeps a picker from offering a value a write would
+reject.
+
+### GET /agent/v1/config/env
+
+The `${env.VAR}` NAMES available for a peer's `apiKey`, each with a
+`set` flag: `{"names": [{"name": "OPENROUTER_API_KEY", "set": true}]}`.
+Names only — a value is never returned, logged, or sent to the browser.
+The list is the macros the running config references plus key-shaped
+environment names, so the UI can flag the commonest silent provider
+death: a macro that no longer resolves.
+
 ### GET /agent/v1/config/backups
 
 Lists the timestamped backups (from these verbs, from `apply`, and from

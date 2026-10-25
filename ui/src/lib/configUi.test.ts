@@ -8,15 +8,19 @@ import { describe, expect, it } from "vitest";
  */
 import {
   ENV_MACRO_RE,
+  appendModelToText,
   backupRow,
   describeWriteResult,
   envMacroError,
   failoverHealthFromModels,
+  filterPickOptions,
   healthFor,
   modelsFromText,
   modelsToText,
+  pickHint,
   retryLabel,
   secretLabel,
+  targetPickOptions,
 } from "./configUi";
 import type { ConfigWriteResponse, SecretRef } from "./agentApi";
 
@@ -158,5 +162,86 @@ describe("backupRow", () => {
     expect(row.name).toBe("config.yaml.bak-20261022T071053Z");
     expect(row.size).toBe("0.7 KiB");
     expect(row.modified).toBe("2026-10-22T07:10:53Z");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live provider pick list
+// ---------------------------------------------------------------------------
+
+describe("filterPickOptions", () => {
+  const options = [
+    { id: "llama-3.1-8b" },
+    { id: "deepseek-chat", hint: "openrouter" },
+    { id: "Qwen/Qwen3-32B" },
+  ];
+
+  it("returns everything for an empty query", () => {
+    expect(filterPickOptions(options, "")).toEqual(options);
+    expect(filterPickOptions(options, "   ")).toEqual(options);
+  });
+
+  it("matches case-insensitively as a substring", () => {
+    expect(filterPickOptions(options, "DEEPSEEK").map((o) => o.id)).toEqual(["deepseek-chat"]);
+    expect(filterPickOptions(options, "qwen3").map((o) => o.id)).toEqual(["Qwen/Qwen3-32B"]);
+    expect(filterPickOptions(options, "llama").map((o) => o.id)).toEqual(["llama-3.1-8b"]);
+  });
+
+  it("matches nothing cleanly", () => {
+    expect(filterPickOptions(options, "gpt-9")).toEqual([]);
+  });
+});
+
+describe("appendModelToText", () => {
+  it("appends to an empty list", () => {
+    expect(appendModelToText("", "m1")).toBe("m1");
+  });
+
+  it("appends after existing entries with a comma", () => {
+    expect(appendModelToText("m1", "m2")).toBe("m1, m2");
+    expect(appendModelToText("m1, m2 ", "m3")).toBe("m1, m2, m3");
+  });
+
+  it("never duplicates an entry already in the list", () => {
+    expect(appendModelToText("m1, m2", "m2")).toBe("m1, m2");
+    expect(appendModelToText("m1,m2", "m1")).toBe("m1,m2");
+  });
+
+  it("does not double the comma when the text ends with one", () => {
+    expect(appendModelToText("m1,", "m2")).toBe("m1, m2");
+  });
+});
+
+describe("pickHint", () => {
+  it("joins owner and context length", () => {
+    expect(pickHint("openrouter", 131072)).toBe("openrouter · ctx 131,072");
+  });
+
+  it("handles either half missing", () => {
+    expect(pickHint("vllm", undefined)).toBe("vllm");
+    expect(pickHint(undefined, 4096)).toBe("ctx 4,096");
+    expect(pickHint(undefined, 0)).toBeUndefined();
+    expect(pickHint("", 0)).toBeUndefined();
+  });
+});
+
+describe("targetPickOptions", () => {
+  it("lists local models as-is and peer catalog entries as FQNs", () => {
+    const opts = targetPickOptions(["local-a"], [{ peer: "upstream", models: ["remote-b"] }]);
+    expect(opts).toEqual([
+      { id: "local-a" },
+      { id: "upstream/remote-b", hint: "peers.upstream" },
+    ]);
+  });
+
+  it("dedupes a peer FQN that already exists as a local model", () => {
+    const opts = targetPickOptions(["upstream/remote-b"], [
+      { peer: "upstream", models: ["remote-b", "remote-c"] },
+    ]);
+    expect(opts.map((o) => o.id)).toEqual(["upstream/remote-b", "upstream/remote-c"]);
+  });
+
+  it("is fine with no peers configured", () => {
+    expect(targetPickOptions(["local-a"], [])).toEqual([{ id: "local-a" }]);
   });
 });
