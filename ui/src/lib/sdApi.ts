@@ -1,17 +1,18 @@
 import type { SdApiTxt2ImgRequest, SdApiResponse, SdApiLora } from "./types";
 import { playgroundSessionHeaders } from "./playgroundSession";
 import { apiUrl } from "./apiPath";
+import { apiAuthHeaders, authedFetch } from "./apiAuth";
 
 export async function generateSdImage(
   request: SdApiTxt2ImgRequest,
   signal?: AbortSignal
 ): Promise<SdApiResponse> {
-  const response = await fetch(apiUrl("/sdapi/v1/txt2img"), {
+  const response = await authedFetch(apiUrl("/sdapi/v1/txt2img"), {
     method: "POST",
-    headers: {
+    headers: apiAuthHeaders({
       "Content-Type": "application/json",
       ...playgroundSessionHeaders,
-    },
+    }),
     body: JSON.stringify(request),
     signal,
   });
@@ -28,9 +29,9 @@ export async function fetchSdLoras(
   model: string,
   signal?: AbortSignal
 ): Promise<SdApiLora[]> {
-  const response = await fetch(
+  const response = await authedFetch(
     apiUrl(`/sdapi/v1/loras?model=${encodeURIComponent(model)}`),
-    { headers: playgroundSessionHeaders, signal }
+    { headers: apiAuthHeaders(playgroundSessionHeaders), signal }
   );
 
   if (!response.ok) {

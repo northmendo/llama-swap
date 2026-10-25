@@ -26,6 +26,7 @@
   import CascadesPanel from "../components/config/CascadesPanel.svelte";
   import AgentAPIPanel from "../components/config/AgentAPIPanel.svelte";
   import { apiUrl } from "../lib/apiPath";
+  import { authedFetch } from "../lib/apiAuth";
   import {
     AgentUnauthorizedError,
     currentToken,
@@ -82,7 +83,7 @@
       const [configState, backupList, modelsResp] = await Promise.all([
         getConfigState(),
         listConfigBackups(),
-        fetch(apiUrl("/v1/models")),
+        authedFetch(apiUrl("/v1/models")),
       ]);
       config = configState;
       backups = backupList;

@@ -1,6 +1,7 @@
 import type { ImageGenerationRequest, ImageGenerationResponse } from "./types";
 import { playgroundSessionHeaders } from "./playgroundSession";
 import { apiUrl } from "./apiPath";
+import { apiAuthHeaders, authedFetch } from "./apiAuth";
 
 export async function generateImage(
   model: string,
@@ -15,12 +16,12 @@ export async function generateImage(
     size,
   };
 
-  const response = await fetch(apiUrl("/v1/images/generations"), {
+  const response = await authedFetch(apiUrl("/v1/images/generations"), {
     method: "POST",
-    headers: {
+    headers: apiAuthHeaders({
       "Content-Type": "application/json",
       ...playgroundSessionHeaders,
-    },
+    }),
     body: JSON.stringify(request),
     signal,
   });

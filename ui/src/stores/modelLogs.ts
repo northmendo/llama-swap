@@ -1,5 +1,6 @@
 import { writable, type Readable } from "svelte/store";
 import { apiUrl } from "../lib/apiPath";
+import { authedFetch } from "../lib/apiAuth";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; /* 100KB of log data */
 
@@ -17,7 +18,7 @@ export function streamModelLog(modelId: string): Readable<string> {
   async function run() {
     controller = new AbortController();
     try {
-      const res = await fetch(apiUrl(`/logs/stream/${encodeURIComponent(modelId)}`), {
+      const res = await authedFetch(apiUrl(`/logs/stream/${encodeURIComponent(modelId)}`), {
         method: "GET",
         signal: controller.signal,
       });

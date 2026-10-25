@@ -1,6 +1,8 @@
 import { writable, type Writable } from "svelte/store";
 import type { APIEventEnvelope, LogData, LogSource } from "../lib/types";
 import { apiUrl } from "../lib/apiPath";
+import { apiAuthHeaders } from "../lib/apiAuth";
+import { openSSE, type SSEConnection } from "../lib/sseStream";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; /* 100KB of log data */
 
@@ -42,7 +44,7 @@ export function connectLogStreams(sources: LogSource[]): () => void {
   const url = `/api/events/logs?${query}`;
   const clear = () => sources.forEach((source) => logStores[source].set(""));
 
-  let eventSource: EventSource | null = null;
+  let eventStream: SSEConnection | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryCount = 0;
   let closed = false;
@@ -50,29 +52,32 @@ export function connectLogStreams(sources: LogSource[]): () => void {
 
   const connect = () => {
     retryTimer = null;
-    eventSource = new EventSource(apiUrl(url));
-
-    eventSource.onopen = () => {
-      clear();
-      retryCount = 0;
-    };
-
-    eventSource.onmessage = (e: MessageEvent) => {
-      try {
-        handleLogEventMessage(e.data);
-      } catch (err) {
-        console.error(e.data, err);
-      }
-    };
-
-    eventSource.onerror = () => {
-      eventSource?.close();
-      eventSource = null;
-      if (closed) return;
-      retryCount++;
-      const delay = Math.min(initialDelay * Math.pow(2, retryCount - 1), 5000);
-      retryTimer = setTimeout(connect, delay);
-    };
+    // EventSource cannot attach the Authorization header the apiKeys
+    // config needs, so the log stream uses the fetch-based SSE client.
+    eventStream = openSSE(
+      apiUrl(url),
+      {
+        onopen: () => {
+          clear();
+          retryCount = 0;
+        },
+        onmessage: (data: string) => {
+          try {
+            handleLogEventMessage(data);
+          } catch (err) {
+            console.error(data, err);
+          }
+        },
+        onerror: () => {
+          eventStream = null;
+          if (closed) return;
+          retryCount++;
+          const delay = Math.min(initialDelay * Math.pow(2, retryCount - 1), 5000);
+          retryTimer = setTimeout(connect, delay);
+        },
+      },
+      apiAuthHeaders(),
+    );
   };
 
   connect();
@@ -80,8 +85,8 @@ export function connectLogStreams(sources: LogSource[]): () => void {
   return () => {
     closed = true;
     if (retryTimer) clearTimeout(retryTimer);
-    eventSource?.close();
-    eventSource = null;
+    eventStream?.close();
+    eventStream = null;
     clear();
   };
 }

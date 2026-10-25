@@ -1,6 +1,7 @@
 import type { ChatMessage, ContentPart } from "./types";
 import { playgroundSessionHeaders } from "./playgroundSession";
 import { apiUrl } from "./apiPath";
+import { apiAuthHeaders, authedFetch } from "./apiAuth";
 
 export type Endpoint = "v1/chat/completions" | "v1/messages" | "v1/responses";
 
@@ -539,12 +540,12 @@ export async function* streamChatCompletion(
   const endpoint = options?.endpoint ?? "v1/chat/completions";
   const send = (timingsPerToken: boolean) => {
     const { url, body } = buildRequest(endpoint, model, messages, { ...options, timingsPerToken });
-    return fetch(apiUrl(url), {
+    return authedFetch(apiUrl(url), {
       method: "POST",
-      headers: {
+      headers: apiAuthHeaders({
         "Content-Type": "application/json",
         ...playgroundSessionHeaders,
-      },
+      }),
       body: JSON.stringify(body),
       signal,
     });

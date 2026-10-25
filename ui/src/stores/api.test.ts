@@ -37,7 +37,9 @@ describe("tailcat api", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => status }));
 
     await expect(fetchTailcatStatus()).resolves.toEqual(status);
-    expect(fetch).toHaveBeenCalledWith("/api/tailcat");
+    // authedFetch always passes a headers object (empty when no token is
+    // stored, so keyless servers see no Authorization header).
+    expect(fetch).toHaveBeenCalledWith("/api/tailcat", expect.objectContaining({ headers: expect.any(Object) }));
     expect(get(tailcatStatus)).toEqual(status);
   });
 
@@ -47,7 +49,8 @@ describe("tailcat api", () => {
 
     await getActivity({ srcPrefix: "tc:", page: 2, limit: 10, sort: "src", order: "asc" });
     expect(fetch).toHaveBeenCalledWith(
-      "/api/metrics/activity?page=2&limit=10&sort=src&order=asc&src_prefix=tc%3A"
+      "/api/metrics/activity?page=2&limit=10&sort=src&order=asc&src_prefix=tc%3A",
+      expect.objectContaining({ headers: expect.any(Object) })
     );
   });
 });
@@ -67,7 +70,7 @@ describe("hardware api", () => {
     };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => snapshot }));
     await expect(getHardware()).resolves.toEqual(snapshot);
-    expect(fetch).toHaveBeenCalledWith("/api/hardware");
+    expect(fetch).toHaveBeenCalledWith("/api/hardware", expect.objectContaining({ headers: expect.any(Object) }));
   });
 
   it("rejects unavailable hardware", async () => {
@@ -277,7 +280,7 @@ describe("api store event handling", () => {
 
     await fetchPlaygroundModels();
 
-    expect(mockFetch).toHaveBeenCalledWith("/v1/models");
+    expect(mockFetch).toHaveBeenCalledWith("/v1/models", expect.objectContaining({ headers: expect.any(Object) }));
     expect(get(playgroundModels).map((model) => model.id)).not.toContain("variant");
     expect(get(playgroundModels).find((model) => model.id === "real")).toMatchObject({
       aliases: ["variant", "alternate"],

@@ -16,9 +16,12 @@
     activeProfile,
     checkPerformanceEnabled,
     enableAPIEvents,
+    fetchPlaygroundModels,
     profiles,
     setActiveProfile,
   } from "./stores/api";
+  import AgentTokenDialog from "./components/AgentTokenDialog.svelte";
+  import { apiAuthPrompt, dismissApiTokenPrompt } from "./lib/apiAuth";
   import { initScreenWidth, initSystemThemeListener, isDarkMode, themeName, appTitle, connectionState } from "./stores/theme";
   import { currentRoute } from "./stores/route";
   import { selectedPlaygroundTab, playgroundTabs } from "./stores/playground";
@@ -134,6 +137,30 @@
   let PlaygroundComponent = $state<Component | null>(null);
   let HelpComponent = $state<Component | null>(null);
 
+  // llama-swap's own API key (the apiKeys config): a 401 on any gated call
+  // sets apiAuthPrompt, and the existing token dialog is surfaced here so
+  // the key can be entered at the point of need instead of the call
+  // failing bare. The token is shared with the /agent/v1 views.
+  let apiTokenDialogOpen = $state(false);
+  let apiTokenDialogReason = $state("");
+  apiAuthPrompt.subscribe((reason) => {
+    if (reason !== null) {
+      apiTokenDialogReason = reason;
+      apiTokenDialogOpen = true;
+    }
+  });
+
+  $effect(() => {
+    if (!apiTokenDialogOpen) dismissApiTokenPrompt();
+  });
+
+  function handleApiTokenSaved(): void {
+    // Reconnect immediately instead of waiting out the retry backoff.
+    enableAPIEvents(true);
+    void fetchPlaygroundModels();
+    checkPerformanceEnabled();
+  }
+
   onMount(() => {
     const cleanupScreenWidth = initScreenWidth();
     const cleanupSystemTheme = initSystemThemeListener();
@@ -243,3 +270,10 @@
     </Sidebar.Inset>
   </Sidebar.Provider>
 </Tooltip.Provider>
+
+<!-- Prompted on any 401 from a gated llama-swap API call (apiKeys set). -->
+<AgentTokenDialog
+  bind:open={apiTokenDialogOpen}
+  reason={apiTokenDialogReason}
+  onsaved={handleApiTokenSaved}
+/>

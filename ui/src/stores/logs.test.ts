@@ -6,27 +6,68 @@ function logMessage(source: string, data: string): string {
   return JSON.stringify({ type: "logData", data: JSON.stringify({ source, data }) });
 }
 
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  url: string;
-  closed = false;
-  onopen: (() => void) | null = null;
-  onmessage: ((e: MessageEvent) => void) | null = null;
-  onerror: (() => void) | null = null;
+/**
+ * The log stream rides on the fetch-based SSE client (EventSource cannot
+ * attach the Authorization header the apiKeys config needs), so the mock
+ * is a controllable event-stream response per fetch call.
+ */
+class FakeSSEStream {
+  static instances: FakeSSEStream[] = [];
+  url = "";
+  headers: Record<string, string> = {};
+  aborted = false;
+  private controller: ReadableStreamDefaultController<Uint8Array> | null = null;
 
-  constructor(url: string) {
-    this.url = url;
-    FakeEventSource.instances.push(this);
+  constructor() {
+    FakeSSEStream.instances.push(this);
   }
 
-  close() {
-    this.closed = true;
+  respond(url: string, init: RequestInit): Response {
+    this.url = url;
+    this.headers = (init.headers ?? {}) as Record<string, string>;
+    const self = this;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        self.controller = controller;
+      },
+    });
+    init.signal?.addEventListener("abort", () => {
+      self.aborted = true;
+      try {
+        self.controller?.close();
+      } catch {
+        // already closed
+      }
+    });
+    return { ok: true, status: 200, body } as unknown as Response;
+  }
+
+  /** Deliver one event-stream frame. */
+  send(data: string): void {
+    this.controller?.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
+  }
+
+  /** End the stream, the way a server-side disconnect does. */
+  end(): void {
+    try {
+      this.controller?.close();
+    } catch {
+      // already closed
+    }
   }
 }
 
+/** Let pending microtasks (fetch resolution, stream reads) run. */
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 beforeEach(() => {
-  FakeEventSource.instances = [];
-  vi.stubGlobal("EventSource", FakeEventSource);
+  FakeSSEStream.instances = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) =>
+      Promise.resolve(new FakeSSEStream().respond(url, init ?? {}))
+    )
+  );
 });
 
 afterEach(() => {
@@ -58,37 +99,44 @@ describe("log streams", () => {
     expect(log.endsWith("END")).toBe(true);
   });
 
-  it("connects only to the requested streams and clears them on close", () => {
-    const close = connectLogStreams(["proxy", "http"]);
-    expect(FakeEventSource.instances).toHaveLength(1);
-    const source = FakeEventSource.instances[0];
-    expect(source.url).toBe("/api/events/logs?stream=proxy&stream=http");
-
+  it("connects only to the requested streams and clears them on close", async () => {
     upstreamLogs.set("untouched");
     proxyLogs.set("stale");
-    source.onopen?.();
+    const close = connectLogStreams(["proxy", "http"]);
+    // The connection (and the store clear that comes with its opening)
+    // is asynchronous, so the stale value is still in place here.
+    expect(get(proxyLogs)).toBe("stale");
+    await flush();
+    expect(FakeSSEStream.instances).toHaveLength(1);
+    const stream = FakeSSEStream.instances[0];
+    expect(stream.url).toBe("/api/events/logs?stream=proxy&stream=http");
     expect(get(proxyLogs)).toBe("");
 
-    source.onmessage?.({ data: logMessage("proxy", "fresh") } as MessageEvent);
+    stream.send(logMessage("proxy", "fresh"));
+    await flush();
     expect(get(proxyLogs)).toBe("fresh");
 
     close();
-    expect(source.closed).toBe(true);
+    expect(stream.aborted).toBe(true);
     expect(get(proxyLogs)).toBe("");
     expect(get(upstreamLogs)).toBe("untouched");
   });
 
-  it("reconnects after an error until closed", () => {
+  it("reconnects after an error until closed", async () => {
     vi.useFakeTimers();
     const close = connectLogStreams(["upstream"]);
-    FakeEventSource.instances[0].onerror?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeSSEStream.instances).toHaveLength(1);
 
-    vi.advanceTimersByTime(1000);
-    expect(FakeEventSource.instances).toHaveLength(2);
+    FakeSSEStream.instances[0].end();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeSSEStream.instances).toHaveLength(2);
 
     close();
-    FakeEventSource.instances[1].onerror?.();
-    vi.advanceTimersByTime(10000);
-    expect(FakeEventSource.instances).toHaveLength(2);
+    FakeSSEStream.instances[1].end();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(FakeSSEStream.instances).toHaveLength(2);
   });
 });

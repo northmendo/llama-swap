@@ -1,6 +1,7 @@
 import type { AudioTranscriptionResponse } from "./types";
 import { playgroundSessionHeaders } from "./playgroundSession";
 import { apiUrl } from "./apiPath";
+import { apiAuthHeaders, authedFetch } from "./apiAuth";
 
 export async function transcribeAudio(
   model: string,
@@ -11,9 +12,9 @@ export async function transcribeAudio(
   formData.append("file", file);
   formData.append("model", model);
 
-  const response = await fetch(apiUrl("/v1/audio/transcriptions"), {
+  const response = await authedFetch(apiUrl("/v1/audio/transcriptions"), {
     method: "POST",
-    headers: playgroundSessionHeaders,
+    headers: apiAuthHeaders(playgroundSessionHeaders),
     body: formData,
     signal,
   });

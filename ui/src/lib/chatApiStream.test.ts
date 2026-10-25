@@ -156,3 +156,48 @@ describe("stop reasons on the other endpoints", () => {
     expect(chunks.at(-1)?.done).toBe(true);
   });
 });
+
+// apiKeys support: the stored bearer token (shared with the /agent/v1
+// views) must ride on chat completions, and a keyless server must keep
+// working with no token stored.
+describe("chat completions auth", () => {
+  const headersOf = (call: unknown[]): Record<string, string> =>
+    (call[1] as RequestInit).headers as Record<string, string>;
+
+  it("attaches the stored bearer token to the completion request", async () => {
+    const { setAgentToken } = await import("../stores/agentApiToken");
+    setAgentToken("s3cret");
+    const fetchMock = vi.fn().mockResolvedValue(okStream());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await collect();
+
+    expect(headersOf(fetchMock.mock.calls[0]).Authorization).toBe("Bearer s3cret");
+  });
+
+  it("goes out keyless when no token is stored, so keyless servers keep working", async () => {
+    const { agentToken } = await import("../stores/agentApiToken");
+    agentToken.set(null);
+    const fetchMock = vi.fn().mockResolvedValue(okStream());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await collect();
+
+    expect(headersOf(fetchMock.mock.calls[0]).Authorization).toBeUndefined();
+  });
+
+  it("surfaces a 401 as the token prompt instead of a bare failure", async () => {
+    const { agentToken } = await import("../stores/agentApiToken");
+    agentToken.set(null);
+    const { apiAuthPrompt } = await import("./apiAuth");
+    const fetchMock = vi.fn().mockResolvedValue(
+      ({ ok: false, status: 401, text: async () => "unauthorized" }) as Response
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let prompted: string | null = null;
+    apiAuthPrompt.subscribe((reason: string | null) => (prompted = reason));
+
+    await expect(collect()).rejects.toThrow(/401/);
+    expect(prompted).toMatch(/apiKeys/);
+  });
+});

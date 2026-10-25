@@ -1,5 +1,6 @@
 import { playgroundSessionHeaders } from "./playgroundSession";
 import { apiUrl } from "./apiPath";
+import { apiAuthHeaders, authedFetch } from "./apiAuth";
 import type { ToolDefinition } from "./chatApi";
 
 /**
@@ -83,17 +84,17 @@ let nextRequestId = 1;
 async function rpc(method: string, params?: unknown, toolName?: string, signal?: AbortSignal): Promise<any> {
   // Mcp-Method and Mcp-Name are required from 2026-07-28 onward so proxies can
   // route without parsing the body. The server rejects a mismatch.
-  const headers: Record<string, string> = {
+  const headers: Record<string, string> = apiAuthHeaders({
     "Content-Type": "application/json",
     "Mcp-Protocol-Version": MCP_PROTOCOL_VERSION,
     "Mcp-Method": method,
     ...playgroundSessionHeaders,
-  };
+  });
   if (toolName) {
     headers["Mcp-Name"] = toolName;
   }
 
-  const response = await fetch(apiUrl(MCP_ENDPOINT), {
+  const response = await authedFetch(apiUrl(MCP_ENDPOINT), {
     method: "POST",
     headers,
     body: JSON.stringify({
