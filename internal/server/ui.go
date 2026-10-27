@@ -24,11 +24,25 @@ func acceptsBrotli(acceptEncoding string) bool {
 	return false
 }
 
+// setUICacheHeaders applies the SPA cache policy: files under assets/ have
+// content-hashed names and may be cached forever; everything else (index.html,
+// favicon, service files) must always revalidate so a new deploy's index is
+// picked up instead of a heuristically-cached one referencing stale assets
+// (observed live: browsers cached the old index, then 404'd on renamed bundles).
+func setUICacheHeaders(w http.ResponseWriter, name string) {
+	if strings.HasPrefix(name, "assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
+}
+
 // serveCompressedFile serves name from fsys, preferring a pre-compressed
 // sibling (name+".br") when the client accepts brotli. It returns an error
 // without writing a response when name cannot be served, so callers can fall
 // back (e.g. SPA routing).
 func serveCompressedFile(fsys http.FileSystem, w http.ResponseWriter, r *http.Request, name string) error {
+	setUICacheHeaders(w, name)
 	if acceptsBrotli(r.Header.Get("Accept-Encoding")) {
 		if cf, err := fsys.Open(name + ".br"); err == nil {
 			defer cf.Close()
